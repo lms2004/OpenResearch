@@ -5,9 +5,8 @@
 
 TP_SIZE=${1:-2}
 BASE_PORT=${2:-8001}
-CUDA_VISIBLE_DEVICES=${3:-0,1,2,3,4,5,6,7}
-MODEL=${4:-"/home/ubuntu/jianwen-us-midwest-1/panlu/model/nano_v3_search_correct_only_347_steps"}
-# MODEL=${4:-"nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16"}
+CUDA_VISIBLE_DEVICES=${3:-0,1,2,3}
+MODEL=${4:-"OpenResearcher/Nemotron-3-Nano-30B-A3B"}
 
 # Get script directory and project root
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"

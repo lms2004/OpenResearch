@@ -125,11 +125,11 @@ OPENAI_API_KEY=your_key        # Get from: https://platform.openai.com/api-keys
 
 ### Example 1: BrowseComp-Plus with Local Search Engine
 
-**Complete workflow using local BM25 search:**
+**Complete workflow using local Dense search:**
 
 ```bash
-# Terminal 1: Start local BM25 search service on port 8000
-bash scripts/start_search_service.sh bm25 8000
+# Terminal 1: Start local Dense search service on port 8000
+bash scripts/start_search_service.sh dense 8000
 
 # Terminal 2: Start vLLM servers (requires 4 GPUs)
 # TP=2, deploy 2 servers starting from port 8001 on GPUs 0,1,2,3
@@ -137,7 +137,7 @@ bash scripts/start_nemotron_servers.sh 2 8001 0,1,2,3
 
 # Terminal 3: Run agent
 bash run_agent.sh \
-    results/browsecomp_plus/OpenResearcher \
+    results/browsecomp_plus/OpenResearcher_dense \
     8001 \
     2 \
     browsecomp_plus \
@@ -146,7 +146,7 @@ bash run_agent.sh \
 ```
 
 **What this does:**
-- Deploys BM25 search on port 8000 as virtual search engine
+- Deploys Dense search on port 8000 as virtual search engine
 - Launches 2 vLLM servers (ports 8001, 8002) with TP=2 across 4 GPUs
 - Runs agent with load balancing across both servers
 
@@ -172,76 +172,29 @@ bash run_agent.sh \
 - `local` - Use local BM25/Dense search service (for BrowseComp-Plus)
 - `serper` - Use Serper Google Search API (for all other benchmarks)
 
+For other parameters, please refer to [assets/docs/parameter.md](assets/docs/parameter.md).
+
 ---
 
 ## Benchmarks
 
 | Benchmark | Dataset Key | Size | Language | Search Backend | Description |
 |-----------|-------------|------|----------|----------------|-------------|
+| **BrowseComp** | `browsecomp` | 1266 | EN | serper | OpenAI public browse benchmark |
 | **BrowseComp-Plus** | `browsecomp_plus` | 830 | EN | local | Deep-research benchmark isolating retriever and LLM agent effects |
-| **HLE** | `hle` | 2,158 | EN | serper | Multiple choice questions from Humanity's Last Exam |
 | **GAIA-text** | `gaia` | 103 | EN | serper | Text-only subset of GAIA benchmark (dev split) |
-| **WebWalkerQA** | `webwalkerqa` | 680 | EN | serper | Web navigation and interaction questions (test split) |
-| **WebWalkerQA-ref** | `webwalkerqa_ref` | 680 | EN | serper | With reference URLs in question |
 | **XBench** | `xbench` | 100 | ZH | serper | DeepSearch benchmark with encrypted test cases |
-| **SealQA** | `seal` | 111 | EN | serper | Hardest subset of SealQA questions |
 | **SealQA-ref** | `seal_ref` | 111 | EN | serper | With reference URLs |
 
 ### Quick Commands
 
 | Scenario | Command |
 |----------|---------|
-| **BrowseComp+ (BM25)** | `bash scripts/start_search_service.sh bm25 8000` then `bash run_agent.sh results/bc 8001 2 browsecomp_plus local <model>` |
-| **BrowseComp+ (Dense)** | `bash scripts/start_search_service.sh dense 8000` then `bash run_agent.sh results/bc 8001 2 browsecomp_plus local <model>` |
-| **HLE** | `bash run_agent.sh results/hle 8001 2 hle serper <model>` |
-| **GAIA** | `bash run_agent.sh results/gaia 8001 2 gaia serper <model>` |
-| **WebWalkerQA** | `bash run_agent.sh results/webwalker 8001 2 webwalkerqa serper <model>` |
-| **XBench** | `bash run_agent.sh results/xbench 8001 2 xbench serper <model>` |
-| **SealQA** | `bash run_agent.sh results/seal 8001 2 seal serper <model>` |
-
----
-
-## Script Parameters
-
-### run_agent.sh
-
-```bash
-bash run_agent.sh [output_dir] [base_port] [num_servers] [dataset_name] [browser_backend] [model_path]
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `output_dir` | `results/browsecomp/output` | Output directory for results |
-| `base_port` | `8002` | Base port number for vLLM servers |
-| `num_servers` | `3` | Number of vLLM servers to use |
-| `dataset_name` | `browsecomp` | Dataset key (see Benchmarks table) |
-| `browser_backend` | `local` | `local` or `serper` |
-| `model_path` | `OpenResearcher/Nemotron-3-Nano-30B-A3B` | Model name or path |
-
-### scripts/start_nemotron_servers.sh
-
-```bash
-bash scripts/start_nemotron_servers.sh [tensor_parallel_size] [base_port] [cuda_visible_devices] [model_path]
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `tensor_parallel_size` | `2` | Number of GPUs per server |
-| `base_port` | `8001` | Base port number for servers |
-| `cuda_visible_devices` | `0,1,2,3,4,5,6,7` | Comma-separated GPU IDs |
-| `model_path` | (see script) | Model name or path |
-
-### scripts/start_search_service.sh
-
-```bash
-bash scripts/start_search_service.sh [searcher_type] [port] [cuda_visible_devices]
-```
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `searcher_type` | `dense` | `bm25` or `dense` |
-| `port` | `8000` | Port for search service |
-| `cuda_visible_devices` | `0` | GPU ID for dense searcher (ignored for BM25) |
+| **BrowseComp** | `bash run_agent.sh results/browsecomp 8001 2 browsecomp serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **BrowseComp+ (BM25)** | `bash scripts/start_search_service.sh bm25 8000` then `bash run_agent.sh results/browsecomp_plus/OpenResearcher_bm25 8001 2 browsecomp_plus local OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **BrowseComp+ (Dense)** | `bash scripts/start_search_service.sh dense 8000` then `bash run_agent.sh results/browsecomp_plus/OpenResearcher_dense 8001 2 browsecomp_plus local OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **GAIA** | `bash run_agent.sh results/gaia 8001 2 gaia serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **XBench** | `bash run_agent.sh results/xbench 8001 2 xbench serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
 
 ---
 
@@ -250,32 +203,11 @@ bash scripts/start_search_service.sh [searcher_type] [port] [cuda_visible_device
 After running experiments, evaluate results:
 
 ```bash
-python eval.py --input_dir results/browsecomp_plus/OpenResearcher
+python eval.py --input_dir results/browsecomp_plus_dense/OpenResearcher
 ```
 
 ---
 
-## Project Structure
-
-```
-.
-├── run_agent.sh                 # Main agent runner
-├── setup.sh                     # One-click setup script
-├── deploy_agent.py              # Agent orchestration
-├── browser.py                   # Browser tool backends
-├── data_utils.py                # Dataset loaders
-├── eval.py                      # Evaluation script
-├── .env.template                # API keys template
-├── scripts/
-│   ├── start_search_service.sh  # Start local search service
-│   ├── start_nemotron_servers.sh # Start vLLM servers
-│   ├── stop_servers.sh          # Stop all servers
-│   ├── deploy_search_service.py # Search service implementation
-│   └── deploy_vllm_service.py   # vLLM service wrapper
-└── utils/
-    ├── openai_generator.py      # OpenAI API generator
-    └── vllm_generator.py        # Local vLLM generator
-```
-
 ## License
 
+For other benchmarks, please refer to [assets/docs](assets/docs).
