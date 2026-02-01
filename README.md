@@ -19,9 +19,9 @@
 
 Evaluation framework for deep research agents with local/remote search engines and multiple LLM backends.
 
-## Table of Contents
+## 📋 Table of Contents
 
-- [Environment Setup](#environment-setup)
+- [🛠 Environment Setup](#environment-setup)
 - [Data Preparation](#data-preparation)
 - [Installation](#installation)
 - [Configuration](#configuration)
@@ -29,89 +29,25 @@ Evaluation framework for deep research agents with local/remote search engines a
 - [Benchmarks](#benchmarks)
 - [Evaluation](#evaluation)
 
-## Environment Setup
+## 🛠 Environment Setup
+### Prerequisites
++ Python 3.12 (recommended)
 
-### 1. System Dependencies
-
+### Installation 
 ```bash
 sudo apt install -y openjdk-21-jdk
-```
-
-### 2. Python Dependencies
-
-```bash
 uv venv --python 3.12
 source .venv/bin/activate
-```
-
-### 3. Tevatron (for BrowseComp-Plus local search)
-
-```bash
 uv pip install -e .
 
+# install tevatron for BrowserComp-plus 
 git clone https://github.com/texttron/tevatron.git
 cd tevatron
 uv pip install -e .
 cd ..
 ```
 
-## Data Preparation
-
-### Local Search Engine (For BrowseComp-Plus)
-
-To run **BrowseComp-Plus** benchmark with local search, you need to download the queries, corpus, and indexes:
-
-**1. Download BrowseComp-Plus Queries (Required):**
-```bash
-# Create data directory
-mkdir -p Tevatron/browsecomp-plus/data
-
-# Download queries (contains questions, answers, and relevance judgements)
-hf download Tevatron/browsecomp-plus \
-    --repo-type dataset \
-    --local-dir Tevatron/browsecomp-plus
-```
-
-**2. Download BrowseComp-Plus Corpus:**
-```bash
-# Create corpus directory
-mkdir -p Tevatron/browsecomp-plus-corpus/data
-mkdir -p Tevatron/browsecomp-plus-indexes
-
-# Download corpus (parquet files with document texts)
-hf download Tevatron/browsecomp-plus-corpus \
-    --repo-type dataset \
-    --local-dir Tevatron/browsecomp-plus-corpus
-```
-
-**3. Download Search Indexes:**
-```bash
-# BM25 Index (lightweight, recommended)
-hf download Tevatron/browsecomp-plus-indexes \
-    --repo-type dataset \
-    --include "bm25/*" \
-    --local-dir Tevatron/browsecomp-plus-indexes
-
-# Dense Index (optional, requires GPU)
-hf download Tevatron/browsecomp-plus-indexes \
-    --repo-type dataset \
-    --include "qwen3-embedding-8b/*" \
-    --local-dir Tevatron/browsecomp-plus-indexes
-```
-
-**4. Download Lucene JARs (for BM25 highlighting):**
-```bash
-mkdir -p tevatron
-cd tevatron
-wget https://repo1.maven.org/maven2/org/apache/lucene/lucene-highlighter/9.9.1/lucene-highlighter-9.9.1.jar
-wget https://repo1.maven.org/maven2/org/apache/lucene/lucene-queries/9.9.1/lucene-queries-9.9.1.jar
-wget https://repo1.maven.org/maven2/org/apache/lucene/lucene-memory/9.9.1/lucene-memory-9.9.1.jar
-cd ..
-```
-
-## Installation
-
-### Quick Setup (Recommended)
+### Data Preparation (Recommended) TODO: update
 
 Run the setup script to install all dependencies automatically:
 
