@@ -29,9 +29,12 @@
 📊 <a href="#" target="_blank">Eval Logs</a>
 </p>
 
-# Introduction
+## Introduction
 
-Evaluation framework for deep research agents with local/remote search engines and multiple LLM backends.
+Evaluation framework for deep research agents with local/remote search engines and multiple LLM backends. TODO
+TODO: teaser figure
+
+## 🏆 Experiments
 
 ## 📋 Table of Contents
 
