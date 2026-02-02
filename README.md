@@ -1,29 +1,28 @@
 <p align="center">
-  <img src="./assets/docs/or-logo1.png" height="82" style="vertical-align: middle;">
-  <img src="./assets/docs/openresearcher-title.svg" height="66" style="vertical-align: middle;"></p>
+  <img src="./assets/imgs/or-logo1.png" height="82" style="vertical-align: middle;">
+  <img src="./assets/imgs/openresearcher-title.svg" height="66" style="vertical-align: middle;"></p>
 
 <div align="center" style="line-height: 1; margin-top: 16px;">
 
-[![Models](https://img.shields.io/badge/Models-FFD966?style=for-the-badge&logo=huggingface&logoColor=ffffff)](https://huggingface.co/OpenResearcher)
-[![Datasets](https://img.shields.io/badge/Datasets-FFB7B2?style=for-the-badge&logo=huggingface&logoColor=ffffff)](#)
+[![Dataset](https://img.shields.io/badge/Datasets-FFB7B2?style=for-the-badge&logo=huggingface&logoColor=ffffff)](https://huggingface.co/OpenResearcher)
+[![Model](https://img.shields.io/badge/Models-FFD966?style=for-the-badge&logo=huggingface&logoColor=ffffff)](https://huggingface.co/OpenResearcher/Nemotron-3-Nano-30B-A3B)
 [![Blog](https://img.shields.io/badge/Blog-4285F4?style=for-the-badge&logo=google-chrome&logoColor=white)](https://openresearcher.github.io/)
 [![WandB Logs](https://img.shields.io/badge/WandB%20Logs-48B5A3?style=for-the-badge&logo=weightsandbiases&logoColor=white)](#)
-[![Eval Logs](https://img.shields.io/badge/Eval%20Logs-755BB4?style=for-the-badge&logo=weightsandbiases&logoColor=white)](#)
+[![Eval Logs](https://img.shields.io/badge/Eval%20Logs-755BB4?style=for-the-badge&logo=weightsandbiases&logoColor=white)](https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Eval-Logs/tree/main)
 
 </div>
 
 <p align="center">
 🤗 <a href="https://huggingface.co/OpenResearcher" target="_blank">HuggingFace</a> ｜
-🤗 <a href="#" target="_blank">Datasets</a> ｜
-📰 <a href="https://openresearcher.github.io/" target="_blank">Blog</a> ｜
-📈 <a href="#" target="_blank">WandB Log</a> ｜
-📊 <a href="#" target="_blank">Eval Logs</a>
+💡 <a href="https://openresearcher.github.io/" target="_blank">Blog</a> ｜
+<img src="./assets/imgs/slack.png" width="14px" style="display:inline;"> <a href="https://join.slack.com/t/openresearcher/shared_invite/zt-3p0r32cky-PqtZkVjjWIAI14~XwcRMfQ" target="_blank">Slack</a> | <img src="./assets/imgs/wechat.svg" width="14px" style="display:inline;"> <a href="#" target="_blank">WeChat</a> |
+
 </p>
 
 ## Introduction
 
 Evaluation framework for deep research agents with local/remote search engines and multiple LLM backends. TODO
-<img width="20639" height="14239" alt="teaser-v3 (1)" src="https://github.com/user-attachments/assets/5ae76a21-8ac9-46a1-94a8-6884d7a4a67b" />
+TODO: set teaser (note file size: too large leading slow rendering)
 
 ## 🏆 Experiments
 
@@ -41,7 +40,8 @@ Evaluation framework for deep research agents with local/remote search engines a
   - [Quick Commands](#quick-commands)
 - [🤝 Core Contributors](#-core-contributors)
 - [🎓 Advisors](#-advisors)
-- [🚀 Contributing](#-contributing)
+- [🙏 Acknowledgements](#-acknowledgements)
+- [✨ Contributing](#-contributing)
 - [📚 Citation](#-citation)
 
 ## 🛠 Environment Setup
@@ -79,7 +79,7 @@ bash setup.sh
 - ✅ Verify Python 3.12 virtual environment and automatically install any missing dependencies
 - ✅ Downlaod BrowserComp-Plus dataset from HuggingFace and set up the directory structure
 
-Please see [benchmarks.md](assets/docs/benchmarks.md) for more info about these deepresearch benchmarks.
+For more info about these deepresearch benchmarks, see [benchmarks.md](assets/docs/benchmarks.md) 
 
 ## 🔍 Configuration
 
@@ -174,7 +174,8 @@ For more info about these deepresearch benchmarks, see [benchmarks.md](assets/do
 | **BrowseComp-Plus (Qwen3-8B Dense Embeddings)** | `bash scripts/start_search_service.sh dense 8000` then `bash run_agent.sh results/browsecomp-plus/OpenResearcher_dense 8001 2 browsecomp-plus local OpenResearcher/Nemotron-3-Nano-30B-A3B` |
 | **BrowseComp** | `bash run_agent.sh results/browsecomp 8001 2 browsecomp serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
 | **GAIA** | `bash run_agent.sh results/gaia 8001 2 gaia serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
-| **XBench** | `bash run_agent.sh results/xbench 8001 2 xbench serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **xbench-DeepResearch** | `bash run_agent.sh results/xbench 8001 2 xbench serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
+| **SEAL-0** | `bash run_agent.sh results/seal 8001 2 seal serper OpenResearcher/Nemotron-3-Nano-30B-A3B` |
 
 **Note:** Don't forget to evaluate your results using:  
 ```bash
@@ -182,11 +183,85 @@ python eval.py --input_dir [INPUT_DIR]
 ```
 ## 🤝 Core Contributors
 
-##  🎓 Advisors
+<table>
+<tr>
+    <td align="center">
+        <a href="https://zhuofeng-li.github.io/">
+            <img src="https://github.com/Zhuofeng-Li.png" width="75px;" alt="Zhuofeng Li"/>
+            <br />
+            <sub><b>Zhuofeng Li</b></sub>
+        </a>
+    </td>
+        <td align="center">
+        <a href="https://github.com/jdf-prog">
+            <img src="https://github.com/jdf-prog.png" width="75px;" alt="Dongfu Jiang"/>
+            <br />
+            <sub><b>Dongfu Jiang</b></sub>
+        </a>
+    </td>
+    </td>
+        <td align="center">
+        <a href="https://mxueguang.github.io/">
+            <img src="https://mxueguang.github.io/images/profile.jpg" width="75px;" alt="Xueguang"/>
+            <br />
+            <sub><b>Xueguang Ma</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://isaacghx.github.io/about/">
+            <img src="https://github.com/IsaacGHX.png" width="75px;" alt="Haoxiang Zhang"/>
+            <br />
+            <sub><b>Haoxiang Zhang</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://github.com/erenup">
+            <img src="https://media.licdn.com/dms/image/v2/C5603AQHqewKc14kzXg/profile-displayphoto-shrink_400_400/profile-displayphoto-shrink_400_400/0/1648383444846?e=1771459200&v=beta&t=I6OTYpCSLp0LqclGi2nguJbEDZ_Aw01H1Y4kkyDYZC8" width="75px;" alt="Ping Nie"/>
+            <br />
+            <sub><b>Ping Nie</b></sub>
+        </a>
+    </td>
+</tr>
+</table>
 
-##  🚀 Contributing
+## 🎓 Advisors
 
+<table>
+<tr>
+      <td align="center">
+        <a href="https://github.com/wenhuchen">
+            <img src="https://github.com/wenhuchen.png" width="75px;" alt="Wenhu Chen"/>
+            <br />
+            <sub><b>Wenhu Chen</b></sub>
+        </a>
+    </td>
+    <td align="center">
+        <a href="https://yuzhimanhua.github.io/">
+            <img src="https://yuzhimanhua.github.io/profile_pic.jpg" width="75px;" alt="Yu Zhang"/>
+            <br />
+            <sub><b>Yu Zhang</b></sub>
+        </a>
+    </td>
+</tr>
+</table>
+
+## 🙏 Acknowledgements
+We thank [Lambda](https://lambda.ai), [Netmind AI](https://www.netmind.ai/), [Verdent AI](https://www.verdent.ai) for GPU and API support!
+
+
+## ✨ Contributing
+We are truly looking forward to open-source contributions to OpenResearcher! If you’re interested in contributing, collaborating, or reporting issues, please feel free to open an issue or submit a pull request (PR). You can also reach us at [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com).
+
+We are also looking forward to your feedback and suggestions!
 
 ##  📚 Citation
-
-
+TODO: update 
+```bibtex
+@misc{deepscaler2025,
+  title={DeepScaleR: Surpassing O1-Preview with a 1.5B Model by Scaling RL},
+  author={Michael Luo and Sijun Tan and Justin Wong and Xiaoxiang Shi and William Y. Tang and Manan Roongta and Colin Cai and Jeffrey Luo and Li Erran Li and Raluca Ada Popa and Ion Stoica},
+  howpublished={\url{https://pretty-radio-b75.notion.site/DeepScaleR-Surpassing-O1-Preview-with-a-1-5B-Model-by-Scaling-RL-19681902c1468005bed8ca303013a4e2}},
+  note={Notion Blog},
+  year={2025}
+}
+```
