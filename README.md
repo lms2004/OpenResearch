@@ -38,13 +38,13 @@
 
 + 💰 **Highly Scalable and Low-Cost** — We generate DeepResearch trajectories at massive scale using self-built retriever over a dedicated ~11B-token [corpus](https://huggingface.co/datasets/OpenResearcher/OpenResearcher-Corpus), eliminating the need for external Search APIs. This scalable retriever significantly reduces training costs and can be extended for RL training in the future.
 
-+ 🚀 **Remarkable Performance on DeepResearch Benchmarks** — OpenResearcher demonstrates leading performance across a range of deep search benchmarks, including BrowseComp-Plus, BrowseComp, GAIA, xbench-DeepSearch.
++ 🚀 **Remarkable Performance on Deep Research Benchmarks** — OpenResearcher demonstrates leading performance across a range of deep research benchmarks, including BrowseComp-Plus, BrowseComp, GAIA, xbench-DeepSearch.
 
 ## 📋 Table of Contents
 
 - [🛠 Environment Setup](#-environment-setup)
   - [Installation](#installation)
-  - [DeepResearch Benchmarks Preparation](#deepresearch-benchmarks-preparation)
+  - [Deep Research Benchmarks Preparation](#deep-research-benchmarks-preparation)
 - [🔍 Configuration](#-configuration)
 - [🚀 Get Started](#-get-started)
   - [Example 1: BrowseComp-Plus with Local Search Engine](#example-1-browsecomp-plus-with-local-search-engine)
@@ -80,7 +80,7 @@ cd ..
 uv pip install -e .
 ```
 
-### DeepResearch Benchmarks Preparation
+### Deep Research Benchmarks Preparation
 
 Run the setup script to automatically download the **[BrowseComp-Plus](https://arxiv.org/abs/2508.06600)** benchmark.  
 Other benchmarks, including **[BrowseComp](https://arxiv.org/abs/2504.12516)**, **[GAIA](https://arxiv.org/abs/2311.12983)** and **[xbench-DeepResearch](https://github.com/THUDM/xbench)****, will be set up automatically when they are first used.
@@ -93,7 +93,7 @@ bash setup.sh
 - ✅ Verify Python 3.12 virtual environment and automatically install any missing dependencies
 - ✅ Downlaod BrowseComp-Plus dataset from HuggingFace and set up the directory structure
 
-For more info about these deepresearch benchmarks, see [benchmarks.md](assets/docs/benchmarks.md) 
+For more info about these deep research benchmarks, see [benchmarks.md](assets/docs/benchmarks.md) 
 
 ## 🔍 Configuration
 
@@ -167,7 +167,7 @@ python eval.py --input_dir results/gaia/OpenResearcher_serper
 ```
 
 ## 🔬 Benchmark OpenResearcher
-We benchmark our OpenResearcher-30B-A3B using below deepresearch benchmarks: 
+We benchmark our OpenResearcher-30B-A3B using below deep research benchmarks: 
 
 | Benchmark | Dataset Key | Size | Language | Search Backend | Description |
 |-----------|-------------|------|----------|----------------|-------------|
@@ -176,7 +176,7 @@ We benchmark our OpenResearcher-30B-A3B using below deepresearch benchmarks:
 | **[GAIA-text](https://arxiv.org/abs/2311.12983)** | `gaia` | 103 | EN | serper | Text-only subset of GAIA benchmark (dev split) |
 | **[xbench-DeepResearch](https://github.com/THUDM/xbench)** | `xbench` | 100 | ZH | serper | DeepSearch benchmark with encrypted test cases |
 
-For more info about these deepresearch benchmarks, see [benchmarks.md](assets/docs/benchmarks.md) 
+For more info about these deep research benchmarks, see [benchmarks.md](assets/docs/benchmarks.md) 
 
 
 ### Quick Commands
