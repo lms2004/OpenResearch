@@ -11,7 +11,7 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-export CUDA_VISIBLE_DEVICES=${3:-0}
+export CUDA_VISIBLE_DEVICES=${3:-7}
 # Set GPU_IDS to 0 because CUDA_VISIBLE_DEVICES restricts the view to only the selected GPUs, 
 # so the application sees them starting from index 0.
 export GPU_IDS=0

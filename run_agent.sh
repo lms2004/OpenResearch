@@ -65,7 +65,7 @@ if [ "$DATASET_NAME" = "browsecomp_plus" ]; then
 else
     # HuggingFace datasets or OpenAI BrowseComp (no local data_path needed)
     echo "Using dataset: $DATASET_NAME"
-    echo "Available datasets: browsecomp, gaia, xbench, seal, seal_ref"
+    echo "Available datasets: browsecomp, gaia, xbench"
     echo ""
 
     python deploy_agent.py \
