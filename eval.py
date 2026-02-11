@@ -547,9 +547,14 @@ class LLMJudge:
         max_retries=5,
     ):
         self.llm = llm
-        self.client = openai.Client(
-            api_key=os.getenv('OPENAI_API_KEY')
-        )
+        api_key = os.getenv('OPENAI_API_KEY')
+        base_url = os.getenv('OPENAI_BASE_URL')
+        
+        client_kwargs = {'api_key': api_key}
+        if base_url:
+            client_kwargs['base_url'] = base_url
+        
+        self.client = openai.Client(**client_kwargs)
         self.rate_limiter = ThreadRateLimiter(qps)
         self.qps = qps
         self.max_workers=50

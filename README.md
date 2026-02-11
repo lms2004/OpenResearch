@@ -117,6 +117,7 @@ SERPER_API_KEY=your_key        # Get from: https://serper.dev/
 
 # OpenAI API (for evaluation scoring)
 OPENAI_API_KEY=your_key        # Get from: https://platform.openai.com/api-keys
+OPENAI_BASE_URL=https://api.openai.com/v1  # Optional: For third-party OpenAI-compatible APIs
 ```
 
 
