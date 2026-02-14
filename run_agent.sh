@@ -14,7 +14,8 @@ SEARCH_URL="http://localhost:8000"
 
 # Get script directory (project root)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-cd "$SCRIPT_DIR"
+PROJECT_ROOT="$SCRIPT_DIR"
+cd "$PROJECT_ROOT"
 
 # Convert model repo ID to local path (EXACT same logic as start_nemotron_servers.sh)
 # This ensures consistency: if start_nemotron_servers.sh downloads to local path,
@@ -33,7 +34,7 @@ fi
 if [[ "$LOCAL_DIR" = /* ]]; then
     MODEL="$LOCAL_DIR"
 else
-    MODEL="$SCRIPT_DIR/$LOCAL_DIR"
+    MODEL="$PROJECT_ROOT/$LOCAL_DIR"
 fi
 
 # Verify model path exists (if it's a repo ID that should have been downloaded)
