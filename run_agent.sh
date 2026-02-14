@@ -7,7 +7,7 @@ BASE_PORT=${2:-8001}
 NUM_SERVERS=${3:-2}
 DATASET_NAME=${4:-"browsecomp-plus"}
 BROWSER_BACKEND=${5:-"local"}
-MODEL=${6:-"OpenResearcher/OpenResearcher-30B-A3B"}
+MODEL_INPUT=${6:-"OpenResearcher/OpenResearcher-30B-A3B"}
 
 
 SEARCH_URL="http://localhost:8000"
@@ -15,6 +15,39 @@ SEARCH_URL="http://localhost:8000"
 # Get script directory (project root)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 cd "$SCRIPT_DIR"
+
+# Convert model repo ID to local path (EXACT same logic as start_nemotron_servers.sh)
+# This ensures consistency: if start_nemotron_servers.sh downloads to local path,
+# run_agent.sh will use the exact same local path for vLLM server API calls
+# Logic matches start_nemotron_servers.sh lines 37-52
+LOCAL_DIR=""
+if [[ "$MODEL_INPUT" == *"/"* ]]; then
+    # repo id，例如 OpenResearcher/OpenResearcher-30B-A3B
+    LOCAL_DIR="$MODEL_INPUT"  # 相对项目根目录
+else
+    # 本地目录（相对或绝对）
+    LOCAL_DIR="$MODEL_INPUT"
+fi
+
+# 计算绝对路径，供 vLLM server API 使用（与 start_nemotron_servers.sh 完全一致）
+if [[ "$LOCAL_DIR" = /* ]]; then
+    MODEL="$LOCAL_DIR"
+else
+    MODEL="$SCRIPT_DIR/$LOCAL_DIR"
+fi
+
+# Verify model path exists (if it's a repo ID that should have been downloaded)
+if [[ "$MODEL_INPUT" == *"/"* ]] && [[ "$MODEL_INPUT" != /* ]]; then
+    if [ ! -d "$MODEL" ]; then
+        echo "Warning: Model path not found: $MODEL"
+        echo "This model should have been downloaded by start_nemotron_servers.sh"
+        echo "Please ensure vLLM server is started with the same model path."
+        echo ""
+        echo "You can either:"
+        echo "  1. Start vLLM server first: bash scripts/start_nemotron_servers.sh ..."
+        echo "  2. Or the model will be auto-downloaded when server starts"
+    fi
+fi
 
 # Build comma-separated server URLs
 SERVER_URLS=""
@@ -32,7 +65,8 @@ done
 echo "=========================================="
 echo "Starting Agent with Multiple vLLM Servers"
 echo "=========================================="
-echo "Model: $MODEL"
+echo "Model Input: $MODEL_INPUT"
+echo "Model Path: $MODEL"
 echo "Number of Servers: $NUM_SERVERS"
 echo "Server URLs:"
 for i in $(seq 0 $((NUM_SERVERS-1))); do
@@ -48,7 +82,17 @@ echo ""
 
 # Check if using browsecomp-plus dataset (needs local data path)
 if [ "$DATASET_NAME" = "browsecomp_plus" ]; then
-    DATA_PATH="${SCRIPT_DIR}/Tevatron/browsecomp-plus/data/*.parquet"
+    # Try to find parquet files - they might be in data/ subdirectory or root directory
+    if [ -d "${SCRIPT_DIR}/Tevatron/browsecomp-plus/data" ] && [ -n "$(ls -A ${SCRIPT_DIR}/Tevatron/browsecomp-plus/data/*.parquet 2>/dev/null)" ]; then
+        DATA_PATH="${SCRIPT_DIR}/Tevatron/browsecomp-plus/data/*.parquet"
+    elif [ -n "$(ls -A ${SCRIPT_DIR}/Tevatron/browsecomp-plus/*.parquet 2>/dev/null)" ]; then
+        DATA_PATH="${SCRIPT_DIR}/Tevatron/browsecomp-plus/*.parquet"
+    else
+        echo "Error: No parquet files found in Tevatron/browsecomp-plus/"
+        echo "Please check if the dataset was downloaded correctly."
+        echo "Expected location: ${SCRIPT_DIR}/Tevatron/browsecomp-plus/"
+        exit 1
+    fi
     echo "Using local BrowseComp-Plus dataset: $DATA_PATH"
     echo ""
 
