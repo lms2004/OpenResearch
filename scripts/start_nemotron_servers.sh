@@ -2,8 +2,9 @@
 # 启动多个 vLLM 服务：按 TP_SIZE 将 GPU 分组，每组启动一个服务（一个端口一个进程）
 # 并在启动前自动配置 HF 镜像 + 自动下载模型到本地（目录已存在则跳过/断点续传）
 #
-# 用法: ./scripts/start_nemotron_servers.sh [tensor_parallel_size] [base_port] [cuda_visible_devices] [model_repo_or_local_dir]
-# 示例: ./scripts/start_nemotron_servers.sh 2 8001 "0,1,2,3,4,5" "OpenResearcher/OpenResearcher-30B-A3B"
+# 用法: ./scripts/start_nemotron_servers.sh [tensor_parallel_size] [base_port] [cuda_visible_devices] [model_repo_or_local_dir] [gpu_memory_utilization]
+# 示例: ./scripts/start_nemotron_servers.sh 2 8001 "0,1,2,3,4,5" "OpenResearcher/OpenResearcher-30B-A3B" 0.9
+# 单卡示例: ./scripts/start_nemotron_servers.sh 1 8001 "0" "OpenResearcher/OpenResearcher-30B-A3B" 0.75
 #
 # 默认本地模型目录（相对项目根目录）：OpenResearcher/OpenResearcher-30B-A3B
 
@@ -13,6 +14,7 @@ TP_SIZE=${1:-2}
 BASE_PORT=${2:-8001}
 CUDA_VISIBLE_DEVICES=${3:-0,1,2,3}
 MODEL_INPUT=${4:-"OpenResearcher/OpenResearcher-30B-A3B"}
+GPU_MEMORY_UTILIZATION=${5:-0.9}
 
 # 获取脚本目录与项目根目录
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -100,6 +102,7 @@ echo "Total GPUs: $TOTAL_GPUS (${GPU_ARRAY[@]})"
 echo "Tensor Parallel Size: $TP_SIZE"
 echo "Number of Servers: $NUM_SERVERS"
 echo "Base Port: $BASE_PORT"
+echo "GPU Memory Utilization: $GPU_MEMORY_UTILIZATION"
 echo "=========================================="
 echo ""
 
@@ -135,7 +138,7 @@ for i in $(seq 0 $((NUM_SERVERS-1))); do
         --model "$MODEL" \
         --port "$PORT" \
         --tensor_parallel_size "$TP_SIZE" \
-        --gpu_memory_utilization 0.9 \
+        --gpu_memory_utilization "$GPU_MEMORY_UTILIZATION" \
         > "$LOG_FILE" 2>&1 &
 
     PID=$!
