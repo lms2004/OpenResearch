@@ -541,14 +541,20 @@ def create_tool_usage_plots(correct_tool_usage, incorrect_tool_usage, output_dir
 class LLMJudge:
     def __init__(
         self,
-        llm= 'gpt-4.1-2025-04-14',
+        llm=None,
         # llm = 'azure-gpt-4.1-2025-04-14',
         qps = 50,
         max_retries=5,
+        base_url=None,
     ):
+        # Use provided llm, or fall back to environment variable, or use default
+        if llm is None:
+            llm = os.getenv('OPENAI_MODEL', 'gpt-4.1-2025-04-14')
         self.llm = llm
         api_key = os.getenv('OPENAI_API_KEY')
-        base_url = os.getenv('OPENAI_BASE_URL')
+        # Use provided base_url, or fall back to environment variable
+        if base_url is None:
+            base_url = os.getenv('OPENAI_BASE_URL')
         
         client_kwargs = {'api_key': api_key}
         if base_url:
@@ -557,7 +563,7 @@ class LLMJudge:
         self.client = openai.Client(**client_kwargs)
         self.rate_limiter = ThreadRateLimiter(qps)
         self.qps = qps
-        self.max_workers=50
+        self.max_workers=20
         self.max_retries = max_retries
         
     def judge(self,data):
@@ -608,6 +614,11 @@ class LLMJudge:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument("--input_dir")
+    parser.add_argument("--base_url", type=str, default=None,
+                        help="OpenAI-compatible API base URL (e.g., http://localhost:8001/v1). "
+                             "If not provided, will use OPENAI_BASE_URL environment variable.")
+    parser.add_argument("--llm", type=str, default=None,
+                        help="LLM model name for judging. If not provided, will use OPENAI_MODEL environment variable or default to gpt-4.1-2025-04-14")
     args = parser.parse_args()
     files = glob.glob(args.input_dir + "/*.jsonl")
     # Exclude evaluated.jsonl to avoid duplicates
@@ -629,7 +640,17 @@ if __name__ == '__main__':
     print(f"Success samples: {len(clean_data)}")
     print(f"Error samples: {len(error_data)}")
 
-    judger = LLMJudge()
+    # Determine llm: command line arg > env var > default
+    llm = args.llm if args.llm else os.getenv('OPENAI_MODEL', 'gpt-4.1-2025-04-14')
+    base_url = args.base_url if args.base_url else os.getenv('OPENAI_BASE_URL')
+    
+    print(f"Using model: {llm}")
+    if base_url:
+        print(f"Using base URL: {base_url}")
+    
+    judger = LLMJudge(llm=llm, base_url=base_url)
+    if args.base_url:
+        print(f"Using base URL: {args.base_url}")
     output = judger.judge(clean_data)
 
     # Create saved_output with only content key (remove extracted_final_answer, reasoning, correct, confidence, parse_error)
