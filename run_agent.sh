@@ -1,6 +1,11 @@
 #!/bin/bash
 # Quick start script for running agent with multiple vLLM servers
 # Usage: ./run_agent.sh [output_dir] [base_port] [num_servers] [dataset_name] [browser_backend] [model_path]
+#
+# To reduce verbose logs and see progress bar clearly, redirect logs to file:
+#   bash run_agent.sh ... 2>&1 | tee output.log | grep -E "(Worker|%|it/s)" 
+# Or simply: bash run_agent.sh ... > agent.log 2>&1 &
+# Then monitor progress: tail -f agent.log | grep -E "Worker.*%"
 
 OUTPUT_DIR=${1:-"results/browsecomp-plus/OpenResearcher_dense"}
 BASE_PORT=${2:-8001}
