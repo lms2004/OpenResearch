@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 
 """
-从评估集（eval_sft.jsonl，与 train.py 验证集同一文件）中拆分出多轮轨迹评估集，保证与训练集无交集：
-- 必须先运行 sft_dataset.py 生成 eval_sft.jsonl，再运行本脚本。
+从评估集（eval_sft_with_tokens.jsonl，含 num_generated_tokens）中拆分出多轮轨迹评估集，保证与训练集无交集：
+- 必须先运行 sft_dataset.py 生成 eval_sft_with_tokens.jsonl，再运行本脚本。
 - 单位：轨迹 sample_id × assistant turn_index；每条样本包含 messages 前缀 + gold_assistant。
 - 可按 num_generated_tokens 筛选轨迹（--max-tokens）。
 """
@@ -17,8 +17,8 @@ from pathlib import Path
 this_dir = Path(__file__).resolve().parent
 DATA_DIR = this_dir / "data"
 
-# 默认从 sft_dataset.py 产出的评估集读取（与 train.py 验证集为同一文件）
-INPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.eval_sft.jsonl"
+# 默认从 sft_dataset.py 产出的带 token 的评估集读取（含 num_generated_tokens，供 --max-tokens 筛选）
+INPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.eval_sft_with_tokens.jsonl"
 OUTPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.tools_sft.eval_turns.jsonl"
 
 MAX_EVAL_TRAJ = 10          # 最多选多少条轨迹（None 表示不过滤）
@@ -53,7 +53,7 @@ def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ, input_path: Path
     if not input_path.is_file():
         raise FileNotFoundError(
             f"Eval pool not found: {input_path}\n"
-            "Run sft_dataset.py first to produce eval_sft.jsonl (train/eval split)."
+            "Run sft_dataset.py first to produce eval_sft_with_tokens.jsonl (train/eval split)."
         )
 
     # 1) 读取评估池样本，并按 num_generated_tokens 过滤过长轨迹
@@ -147,13 +147,13 @@ def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ, input_path: Path
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build eval turns from eval_sft.jsonl (run sft_dataset.py first). Same file as train.py validation set."
+        description="Build eval turns from eval_sft_with_tokens.jsonl (run sft_dataset.py first). Input has num_generated_tokens for --max-tokens filtering."
     )
     parser.add_argument(
         "--input",
         type=Path,
         default=INPUT_PATH,
-        help="Input JSONL: eval set only (default: eval_sft.jsonl, same as train.py --eval_jsonl).",
+        help="Input JSONL: eval set with num_generated_tokens (default: eval_sft_with_tokens.jsonl).",
     )
     parser.add_argument(
         "--output",

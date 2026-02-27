@@ -4,9 +4,9 @@
 """
 训练流程（推荐顺序）：
   1) 数据准备: parse.py → materialize.py → sft_dataset.py
-     → tools_sft.jsonl（训练集）、eval_sft.jsonl（验证集，与 make_eval_turns 共用）
+     → tools_sft.jsonl（训练集）、eval_sft.jsonl（验证集，与训练集列一致）、eval_sft_with_tokens.jsonl（供 make_eval_turns 用）
   2) 训练: train.py --model_name_or_path <base> [--train_jsonl tools_sft.jsonl] [--eval_jsonl eval_sft.jsonl]
-  3) 评估: make_eval_turns.py → eval_generate.py --eval_jsonl tools_sft.eval_turns.jsonl
+  3) 评估: make_eval_turns.py（--input eval_sft_with_tokens.jsonl）→ eval_generate.py --eval_jsonl tools_sft.eval_turns.jsonl
 """
 
 import os

@@ -15,12 +15,13 @@ from data_utils import get_browser_tools_json_schema
 # 使用统一的工具 JSON schema 生成函数
 TOOLS_JSON_SCHEMA_STR = get_browser_tools_json_schema()
 
-# 与 materialize 流水线衔接：输入为 materialized.jsonl（含 num_generated_tokens），输出为 tools_sft.jsonl（训练集）+ 一份评估集（与训练集无交集，供 train.py 验证与 make_eval_turns 共用）
+# 与 materialize 流水线衔接：输入为 materialized.jsonl（含 num_generated_tokens），输出为 tools_sft.jsonl（训练集）+ 两份评估集（与训练集无交集）
 input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl"
 output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
-# 评估集只写一份，SFT 格式（messages + tools + num_generated_tokens），train.py 与 make_eval_turns.py 共用同一路径
+# 评估集（与训练集列一致：messages + tools），供 train.py --eval_jsonl 使用
 eval_sft_path = this_dir / "data/converted_gpt_oss_search_correct.eval_sft.jsonl"
-eval_pool_path = eval_sft_path
+# 评估集（含 num_generated_tokens），供 make_eval_turns.py 按 token 筛选使用
+eval_sft_with_tokens_path = this_dir / "data/converted_gpt_oss_search_correct.eval_sft_with_tokens.jsonl"
 
 # 默认按 token 数筛选：超过此值的轨迹不写入（仅当样本有 num_generated_tokens 时生效）
 DEFAULT_MAX_TOKENS = 30000
@@ -169,10 +170,21 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
             n_train += 1
 
-    # 4) 写评估集（仅一份，SFT 格式 + num_generated_tokens，供 train.py 与 make_eval_turns.py 共用）
+    # 4) 写评估集：两份文件，列与训练集一致的一份给 train.py，带 num_generated_tokens 的一份给 make_eval_turns.py
     if eval_indices:
         eval_sft_path.parent.mkdir(parents=True, exist_ok=True)
+        # 4a) eval_sft.jsonl：仅 messages + tools，与训练集列一致，供 train.py --eval_jsonl
         with eval_sft_path.open("w", encoding="utf-8") as fout:
+            for i in sorted(eval_indices):
+                sample = samples[i]
+                messages = normalize_messages(sample["messages"])
+                out_obj = {
+                    "messages": messages,
+                    "tools": TOOLS_JSON_SCHEMA_STR,
+                }
+                fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
+        # 4b) eval_sft_with_tokens.jsonl：含 num_generated_tokens，供 make_eval_turns.py 按 --max-tokens 筛选
+        with eval_sft_with_tokens_path.open("w", encoding="utf-8") as fout:
             for i in sorted(eval_indices):
                 sample = samples[i]
                 messages = normalize_messages(sample["messages"])
@@ -184,7 +196,8 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
                     out_obj["num_generated_tokens"] = sample["num_generated_tokens"]
                 fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
         print(f"Converted {n_train} train samples -> {output_path}")
-        print(f"Eval {len(eval_indices)} samples -> {eval_sft_path} (train.py --eval_jsonl & make_eval_turns.py --input)")
+        print(f"Eval {len(eval_indices)} samples -> {eval_sft_path} (train.py --eval_jsonl, same columns as train)")
+        print(f"Eval (with tokens) {len(eval_indices)} samples -> {eval_sft_with_tokens_path} (make_eval_turns.py --input)")
     else:
         print(f"Converted {n_train} train samples -> {output_path}")
         if eval_ratio > 0:
@@ -193,7 +206,7 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build tools_sft.jsonl (train) and eval_sft.jsonl (eval) from materialized.jsonl; train/eval split avoids leakage; eval set is shared by train.py and make_eval_turns.py."
+        description="Build tools_sft.jsonl (train), eval_sft.jsonl (eval for train.py, same columns as train), and eval_sft_with_tokens.jsonl (eval for make_eval_turns.py)."
     )
     parser.add_argument(
         "--max-tokens",
@@ -205,7 +218,7 @@ def main():
         "--eval-ratio",
         type=float,
         default=DEFAULT_EVAL_RATIO,
-        help=f"Fraction of (filtered) samples for eval set (default: {DEFAULT_EVAL_RATIO}). Written to eval_sft.jsonl.",
+        help=f"Fraction of (filtered) samples for eval set (default: {DEFAULT_EVAL_RATIO}). Written to eval_sft.jsonl and eval_sft_with_tokens.jsonl.",
     )
     parser.add_argument(
         "--eval-seed",
