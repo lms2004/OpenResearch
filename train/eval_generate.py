@@ -23,6 +23,18 @@ def _last_user_content(messages):
     return ""
 
 
+def _assistant_turn_content(m):
+    """单条 assistant 消息的展示内容（content 或 [tool_calls]）。"""
+    if m.get("role") != "assistant":
+        return ""
+    c = m.get("content") or ""
+    if c:
+        return c[:2000]
+    if m.get("tool_calls"):
+        return "[tool_calls]"
+    return ""
+
+
 def _last_assistant_content(messages):
     for m in reversed(messages):
         if m.get("role") == "assistant":
@@ -112,6 +124,11 @@ def parse_args():
         default=None,
         help="wandb 运行名（默认由 model_dir 与 eval_jsonl 推断）",
     )
+    p.add_argument(
+        "--per_turn_eval",
+        action="store_true",
+        help="按轮次评估：对每个 sample 的每个 assistant 回复，用「到该轮为止的 messages」分别生成并记录（否则整段对话只生成最后一轮）",
+    )
     return p.parse_args()
 
 
@@ -172,26 +189,29 @@ def main():
 
     # 缓冲区：做批量并发生成
     batch_prompts = []
-    batch_samples = []
-    batch_messages = []
+    batch_meta = []  # 每个元素: dict with sample, messages, turn_index (None=整段), gold_display, prompt
 
     def flush_batch():
         nonlocal total, total_response_chars, table_rows
         if not batch_prompts:
             return
         outputs = llm.generate(batch_prompts, sampling_params)
-        # vLLM 会保证 outputs 与输入 prompts 顺序一致
         for i, out in enumerate(outputs):
             if not out.outputs:
                 continue
             generated_text = out.outputs[0].text
-
-            sample = batch_samples[i]
-            messages = batch_messages[i]
+            meta = batch_meta[i]
+            sample = meta["sample"]
+            messages = meta["messages"]
+            prompt = batch_prompts[i]
+            turn_index = meta.get("turn_index")
+            gold_display = meta["gold_display"]
 
             out_obj = dict(sample)
             out_obj["model_response"] = generated_text
-            # 写入文件
+            if turn_index is not None:
+                out_obj["eval_turn_index"] = turn_index
+                out_obj["eval_gold_assistant_this_turn"] = gold_display
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
 
             total += 1
@@ -199,19 +219,20 @@ def main():
 
             if args.log_wandb and _HAS_WANDB:
                 last_user = _last_user_content(messages)
-                gold_asst = _last_assistant_content(messages)
+                prompt_display = (prompt[:2000] + "…") if len(prompt) > 2000 else prompt
                 resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
-                table_rows.append([total, last_user, gold_asst, resp_display])
+                turn_idx = turn_index if turn_index is not None else -1
+                table_rows.append([total, turn_idx, prompt_display, last_user, gold_display, resp_display])
 
         batch_prompts.clear()
-        batch_samples.clear()
-        batch_messages.clear()
+        batch_meta.clear()
 
     with eval_path.open("r", encoding="utf-8") as fin, out_path.open(
         "w", encoding="utf-8"
     ) as fout:
+        sample_count = 0
         for line in tqdm(fin, desc="eval-generate"):
-            if args.num_samples is not None and total >= args.num_samples:
+            if args.num_samples is not None and sample_count >= args.num_samples:
                 break
 
             line = line.strip()
@@ -227,39 +248,64 @@ def main():
             if not messages:
                 continue
 
+            sample_count += 1
+
             tools = load_tools_field(sample)
 
-            # 利用 chat_template 构造文本 prompt，交给 vLLM 生成
-            try:
-                prompt = tokenizer.apply_chat_template(
-                    messages,
-                    tools=tools,
-                    add_generation_prompt=True,
-                    tokenize=False,
-                    truncation=False,
-                )
-            except Exception:
-                # chat_template 失败时跳过该样本
-                continue
-
-            # 使用 tokenizer 计算长度；对极长样本直接跳过，不再做截断
-            enc = tokenizer(
-                prompt,
-                add_special_tokens=False,
-                return_attention_mask=False,
-            )
-            input_ids = enc["input_ids"]
-            # 对特别长的样本（>30000 tokens）直接跳过，避免极端长上下文拖慢 / 撞 vLLM 限制
-            if len(input_ids) > 30000:
-                continue
-
-            batch_prompts.append(prompt)
-            batch_samples.append(sample)
-            batch_messages.append(messages)
-
-            # 到达批大小就触发一次并发生成
-            if len(batch_prompts) >= args.vllm_batch_size:
-                flush_batch()
+            if args.per_turn_eval:
+                # 按轮次：对每个 assistant 位置，用「到该轮为止的 messages」生成
+                for i, m in enumerate(messages):
+                    if m.get("role") != "assistant":
+                        continue
+                    prefix = messages[:i]
+                    try:
+                        prompt = tokenizer.apply_chat_template(
+                            prefix,
+                            tools=tools,
+                            add_generation_prompt=True,
+                            tokenize=False,
+                            truncation=False,
+                        )
+                    except Exception:
+                        continue
+                    enc = tokenizer(prompt, add_special_tokens=False, return_attention_mask=False)
+                    if len(enc["input_ids"]) > 30000:
+                        continue
+                    gold_display = _assistant_turn_content(m)
+                    batch_prompts.append(prompt)
+                    batch_meta.append({
+                        "sample": sample,
+                        "messages": messages,
+                        "turn_index": i,
+                        "gold_display": gold_display,
+                    })
+                    if len(batch_prompts) >= args.vllm_batch_size:
+                        flush_batch()
+            else:
+                # 整段对话只生成最后一轮
+                try:
+                    prompt = tokenizer.apply_chat_template(
+                        messages,
+                        tools=tools,
+                        add_generation_prompt=True,
+                        tokenize=False,
+                        truncation=False,
+                    )
+                except Exception:
+                    continue
+                enc = tokenizer(prompt, add_special_tokens=False, return_attention_mask=False)
+                if len(enc["input_ids"]) > 30000:
+                    continue
+                gold_display = _last_assistant_content(messages)
+                batch_prompts.append(prompt)
+                batch_meta.append({
+                    "sample": sample,
+                    "messages": messages,
+                    "turn_index": None,
+                    "gold_display": gold_display,
+                })
+                if len(batch_prompts) >= args.vllm_batch_size:
+                    flush_batch()
 
         # 处理最后不足一批的样本
         flush_batch()
@@ -278,9 +324,10 @@ def main():
             "temperature": args.temperature,
             "top_p": args.top_p,
             "num_samples_evaluated": total,
+            "per_turn_eval": args.per_turn_eval,
         })
         table = wandb.Table(
-            columns=["sample_id", "last_user_message", "gold_assistant", "model_response"],
+            columns=["sample_id", "turn_index", "prompt", "last_user_message", "gold_assistant", "model_response"],
             data=table_rows,
         )
         wandb.log({"eval/responses": table})
