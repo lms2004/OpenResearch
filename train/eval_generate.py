@@ -105,7 +105,20 @@ def parse_args():
         "--vllm_batch_size",
         type=int,
         default=32,
-        help="vLLM 并发生成时的批大小（提示条数），默认 32",
+        help="vLLM 并发生成时的批大小（提示条数），默认 32。4 卡时可适当增大（如 64～128）以吃满显存。",
+    )
+    p.add_argument(
+        "--tensor_parallel_size",
+        type=int,
+        default=1,
+        metavar="N",
+        help="vLLM 张量并行 GPU 数，多卡推理时设为卡数（如 4）以充分利用多卡。",
+    )
+    p.add_argument(
+        "--gpu_memory_utilization",
+        type=float,
+        default=0.90,
+        help="vLLM 单卡显存占用比例（0~1），默认 0.9。",
     )
     p.add_argument(
         "--log_wandb",
@@ -175,7 +188,14 @@ def main():
         tokenizer.pad_token = tokenizer.eos_token
 
     # vLLM 模型（直接加载你训练好的 checkpoint 目录）
-    llm = LLM(model=str(model_dir), trust_remote_code=True)
+    # tensor_parallel_size=4 时使用 4 卡张量并行，gpu_memory_utilization 提高以吃满显存
+    llm = LLM(
+        model=str(model_dir),
+        trust_remote_code=True,
+        tensor_parallel_size=args.tensor_parallel_size,
+        gpu_memory_utilization=args.gpu_memory_utilization,
+        max_model_len=args.max_input_length + args.max_new_tokens,
+    )
     sampling_params = SamplingParams(
         max_tokens=args.max_new_tokens,
         temperature=args.temperature,
@@ -355,6 +375,9 @@ def main():
             "max_new_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "top_p": args.top_p,
+            "tensor_parallel_size": args.tensor_parallel_size,
+            "gpu_memory_utilization": args.gpu_memory_utilization,
+            "vllm_batch_size": args.vllm_batch_size,
             "num_samples_evaluated": total,
             "per_turn_eval": args.per_turn_eval,
         })
