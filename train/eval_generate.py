@@ -90,6 +90,12 @@ def parse_args():
         help="只评估前 N 条样本（默认 None 表示全部）",
     )
     p.add_argument(
+        "--vllm_batch_size",
+        type=int,
+        default=32,
+        help="vLLM 并发生成时的批大小（提示条数），默认 32",
+    )
+    p.add_argument(
         "--log_wandb",
         action="store_true",
         help="将评估结果（含模型响应表格）记录到 wandb",
@@ -137,24 +143,69 @@ def main():
     if not model_dir.is_dir():
         raise FileNotFoundError(f"model_dir 不存在: {model_dir}")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    # ---------------- vLLM: 作为推理后端进行加速 ----------------
+    try:
+        from vllm import LLM, SamplingParams
+    except ImportError as e:
+        raise ImportError(
+            "当前评估脚本已改为使用 vLLM 进行推理，请先安装 vllm：\n\n"
+            "  pip install vllm\n"
+        ) from e
 
-    # 加载训练好的模型与 tokenizer（其中已包含我们在 train.py 中设置的 chat_template）
+    # 加载 tokenizer（其中已包含我们在 train.py 中设置的 chat_template）
     tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    model = AutoModelForCausalLM.from_pretrained(
-        model_dir,
-        trust_remote_code=True,
-        device_map="auto" if torch.cuda.is_available() else None,
+    # vLLM 模型（直接加载你训练好的 checkpoint 目录）
+    llm = LLM(model=str(model_dir), trust_remote_code=True)
+    sampling_params = SamplingParams(
+        max_tokens=args.max_new_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
     )
-    model.eval()
 
     # 用于 wandb 表格
     table_rows = []
     total = 0
     total_response_chars = 0
+
+    # 缓冲区：做批量并发生成
+    batch_prompts = []
+    batch_samples = []
+    batch_messages = []
+
+    def flush_batch():
+        nonlocal total, total_response_chars, table_rows
+        if not batch_prompts:
+            return
+        outputs = llm.generate(batch_prompts, sampling_params)
+        # vLLM 会保证 outputs 与输入 prompts 顺序一致
+        for i, out in enumerate(outputs):
+            if not out.outputs:
+                continue
+            generated_text = out.outputs[0].text
+
+            sample = batch_samples[i]
+            messages = batch_messages[i]
+
+            out_obj = dict(sample)
+            out_obj["model_response"] = generated_text
+            # 写入文件
+            fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
+
+            total += 1
+            total_response_chars += len(generated_text)
+
+            if args.log_wandb and _HAS_WANDB:
+                last_user = _last_user_content(messages)
+                gold_asst = _last_assistant_content(messages)
+                resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
+                table_rows.append([total, last_user, gold_asst, resp_display])
+
+        batch_prompts.clear()
+        batch_samples.clear()
+        batch_messages.clear()
 
     with eval_path.open("r", encoding="utf-8") as fin, out_path.open(
         "w", encoding="utf-8"
@@ -178,49 +229,30 @@ def main():
 
             tools = load_tools_field(sample)
 
-            # 利用 chat_template 构造模型输入
+            # 利用 chat_template 构造文本 prompt，交给 vLLM 生成
             try:
-                input_ids = tokenizer.apply_chat_template(
+                prompt = tokenizer.apply_chat_template(
                     messages,
                     tools=tools,
                     add_generation_prompt=True,
-                    return_tensors="pt",
+                    tokenize=False,
                     truncation=True,
                     max_length=args.max_input_length,
-                ).to(device)
+                )
             except Exception:
                 # chat_template 失败时跳过该样本
                 continue
 
-            with torch.no_grad():
-                output_ids = model.generate(
-                    input_ids=input_ids,
-                    max_new_tokens=args.max_new_tokens,
-                    do_sample=args.temperature > 0,
-                    temperature=args.temperature,
-                    top_p=args.top_p,
-                    pad_token_id=tokenizer.pad_token_id,
-                    eos_token_id=tokenizer.eos_token_id,
-                )
+            batch_prompts.append(prompt)
+            batch_samples.append(sample)
+            batch_messages.append(messages)
 
-            # 只取新生成的部分
-            gen_ids = output_ids[0, input_ids.shape[1] :]
-            generated_text = tokenizer.decode(gen_ids, skip_special_tokens=False)
+            # 到达批大小就触发一次并发生成
+            if len(batch_prompts) >= args.vllm_batch_size:
+                flush_batch()
 
-            # 将模型输出附加到样本中，方便后续分析
-            out_obj = dict(sample)
-            out_obj["model_response"] = generated_text
-
-            fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
-            total += 1
-            total_response_chars += len(generated_text)
-
-            if args.log_wandb and _HAS_WANDB:
-                # 表格中展示截断后的文本，便于在 wandb UI 中浏览
-                last_user = _last_user_content(messages)
-                gold_asst = _last_assistant_content(messages)
-                resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
-                table_rows.append([total, last_user, gold_asst, resp_display])
+        # 处理最后不足一批的样本
+        flush_batch()
 
     if args.log_wandb and not _HAS_WANDB:
         print("⚠️ --log_wandb 已指定但未安装 wandb，跳过 wandb 记录。可执行: pip install wandb")
