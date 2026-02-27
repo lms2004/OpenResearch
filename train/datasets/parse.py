@@ -295,19 +295,22 @@ def convert_parquet_to_jsonl(
                         results_by_idx[idx] = future.result()
                         pbar.update(1)
 
-            for i in range(len(parquet_paths)):
-                for record in results_by_idx[i]:
-                    out_jsonl.write(
-                        json.dumps(record, ensure_ascii=False) + "\n"
-                    )
-                    if out_pretty is not None and pretty_rows < pretty_limit:
-                        if pretty_rows > 0:
-                            out_pretty.write(",\n")
-                        out_pretty.write(
-                            json.dumps(record, ensure_ascii=False, indent=2)
+            total_to_write = sum(len(results_by_idx[i]) for i in range(len(parquet_paths)))
+            with tqdm(total=total_to_write, unit="row", desc="Writing") as pbar:
+                for i in range(len(parquet_paths)):
+                    for record in results_by_idx[i]:
+                        out_jsonl.write(
+                            json.dumps(record, ensure_ascii=False) + "\n"
                         )
-                        pretty_rows += 1
-                    total_rows += 1
+                        if out_pretty is not None and pretty_rows < pretty_limit:
+                            if pretty_rows > 0:
+                                out_pretty.write(",\n")
+                            out_pretty.write(
+                                json.dumps(record, ensure_ascii=False, indent=2)
+                            )
+                            pretty_rows += 1
+                        total_rows += 1
+                        pbar.update(1)
 
             if out_pretty is not None:
                 out_pretty.write("\n]\n")
