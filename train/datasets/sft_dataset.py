@@ -127,6 +127,10 @@ def convert():
                 continue
 
             sample = json.loads(line)
+            # 如果上游 materialize 已经计算了 token 数量，这里再次做一道保险过滤
+            num_tokens = sample.get("num_generated_tokens")
+            if isinstance(num_tokens, int) and num_tokens > 30000:
+                continue
             raw_messages = sample["messages"]
 
             messages = normalize_messages(raw_messages)
