@@ -11,10 +11,12 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-export CUDA_VISIBLE_DEVICES=${3:-7}
-# Set GPU_IDS to 0 because CUDA_VISIBLE_DEVICES restricts the view to only the selected GPUs, 
-# so the application sees them starting from index 0.
-export GPU_IDS=0
+export CUDA_VISIBLE_DEVICES=${3:-0,1}
+# With CUDA_VISIBLE_DEVICES set, the process sees GPUs as 0,1,...; set GPU_IDS to
+# use that many (0, 0,1, 0,1,2, etc.) so the dense searcher loads one model per GPU.
+_ngpu=$(echo "${CUDA_VISIBLE_DEVICES}" | tr ',' '\n' | wc -l)
+export GPU_IDS=$(seq -s, 0 $((_ngpu - 1)))
+export GPU_IDS=${GPU_IDS:-0}
 
 # Parameters
 SEARCHER_TYPE="${1:-dense}"
@@ -25,6 +27,8 @@ echo -e "${GREEN}Starting Search Service${NC}"
 echo -e "${GREEN}================================${NC}"
 echo "Searcher Type: ${SEARCHER_TYPE}"
 echo "Port: ${PORT}"
+echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}"
+echo "GPU_IDS (dense): ${GPU_IDS}"
 echo ""
 
 # Get script directory and project root
