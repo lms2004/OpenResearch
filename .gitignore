@@ -99,3 +99,4 @@ ray-logs/
 tmp/
 *.tmp.*
 wget-log
+.env.template
