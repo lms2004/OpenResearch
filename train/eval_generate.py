@@ -190,11 +190,11 @@ def main():
     # 缓冲区：做批量并发生成
     batch_prompts = []
     # 每个元素: dict with
-    #   sample_index: 当前对话在 eval_jsonl 中的索引（从 0 开始）
+    #   sample_index: 当前样本在 eval_jsonl 中的顺序索引（从 0 开始）
     #   sample: 原始 sample
     #   messages: 完整 messages
-    #   turn_index: 当前评估的 assistant 轮次（整段评估时为 None）
-    #   gold_display: 该轮的 gold assistant 文本
+    #   turn_index: 当前评估的 assistant 轮次或样本自带的 turn_index（若没有则为 None）
+    #   gold_display: 该轮 / 该样本的 gold assistant 文本
     batch_meta = []
 
     def flush_batch():
@@ -211,13 +211,22 @@ def main():
             sample = meta["sample"]
             messages = meta["messages"]
             prompt = batch_prompts[i]
-            turn_index = meta.get("turn_index")
+            # 优先使用样本自带的 turn_index（如 eval_turns.jsonl），否则退回批次元信息中的 turn_index
+            meta_turn_index = meta.get("turn_index")
+            sample_turn_index = sample.get("turn_index")
+            turn_index = sample_turn_index if sample_turn_index is not None else meta_turn_index
             gold_display = meta["gold_display"]
 
             out_obj = dict(sample)
-            out_obj["model_response"] = generated_text
+            # 显式写回 sample_id / turn_index，便于后续对齐原始轨迹
+            sample_id = sample.get("sample_id", sample_index)
+            out_obj["sample_id"] = sample_id
             if turn_index is not None:
-                out_obj["eval_turn_index"] = turn_index
+                out_obj["turn_index"] = turn_index
+            out_obj["model_response"] = generated_text
+            # 对逐轮评估的样本，额外带上当前轮的 gold 展示文本字段，便于分析
+            if meta_turn_index is not None:
+                out_obj["eval_turn_index"] = meta_turn_index
                 out_obj["eval_gold_assistant_this_turn"] = gold_display
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
 
@@ -229,7 +238,7 @@ def main():
                 prompt_display = prompt  # 不再截断，便于在 wandb 中查看完整上下文
                 resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
                 turn_id = -1 if turn_index is None else turn_index
-                table_rows.append([sample_index, turn_id, prompt_display, gold_display, resp_display])
+                table_rows.append([sample_id, turn_id, prompt_display, gold_display, resp_display])
 
         batch_prompts.clear()
         batch_meta.clear()
@@ -255,9 +264,8 @@ def main():
             if not messages:
                 continue
 
-            # 当前对话在 eval_jsonl 中的索引（从 0 开始），用于 wandb 中区分不同轨迹。
-            # 若样本本身携带 sample_id（例如专门的 eval_turns.jsonl），优先使用该字段。
-            sample_index = sample.get("sample_id", sample_count)
+            # 当前样本在 eval_jsonl 中的顺序索引（从 0 开始），用于 wandb / 日志统计。
+            sample_index = sample_count
             sample_count += 1
 
             tools = load_tools_field(sample)
@@ -283,13 +291,15 @@ def main():
                         continue
                     gold_display = _assistant_turn_content(m)
                     batch_prompts.append(prompt)
-                    batch_meta.append({
-                        "sample_index": sample_index,
-                        "sample": sample,
-                        "messages": messages,
-                        "turn_index": i,
-                        "gold_display": gold_display,
-                    })
+                    batch_meta.append(
+                        {
+                            "sample_index": sample_index,
+                            "sample": sample,
+                            "messages": messages,
+                            "turn_index": i,
+                            "gold_display": gold_display,
+                        }
+                    )
                     if len(batch_prompts) >= args.vllm_batch_size:
                         flush_batch()
             else:
@@ -314,13 +324,18 @@ def main():
                 else:
                     gold_display = _last_assistant_content(messages)
                 batch_prompts.append(prompt)
-                batch_meta.append({
-                    "sample_index": sample_index,
-                    "sample": sample,
-                    "messages": messages,
-                    "turn_index": None,
-                    "gold_display": gold_display,
-                })
+                # 若 eval_jsonl（例如 make_eval_turns.py 输出）自带 turn_index，则在 meta 中保留该字段，
+                # 便于后续输出与原始轨迹对齐。
+                existing_turn_index = sample.get("turn_index")
+                batch_meta.append(
+                    {
+                        "sample_index": sample_index,
+                        "sample": sample,
+                        "messages": messages,
+                        "turn_index": existing_turn_index,
+                        "gold_display": gold_display,
+                    }
+                )
                 if len(batch_prompts) >= args.vllm_batch_size:
                     flush_batch()
 

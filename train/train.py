@@ -3,9 +3,10 @@
 
 """
 训练流程（推荐顺序）：
-  1) 数据准备: 原始数据 → parse.py → materialize → sft_dataset.py → *.tools_sft.jsonl
-  2) 训练: train.py --model_name_or_path <base> --train_jsonl <train.tools_sft.jsonl> [--eval_jsonl ...]
-  3) 评估: eval_generate.py --model_dir <output_dir> --eval_jsonl ... --output_jsonl ... [--log_wandb]
+  1) 数据准备: parse.py → materialize.py → sft_dataset.py
+     → tools_sft.jsonl（训练集）、eval_sft.jsonl（验证集，与 make_eval_turns 共用）
+  2) 训练: train.py --model_name_or_path <base> [--train_jsonl tools_sft.jsonl] [--eval_jsonl eval_sft.jsonl]
+  3) 评估: make_eval_turns.py → eval_generate.py --eval_jsonl tools_sft.eval_turns.jsonl
 """
 
 import os
@@ -24,14 +25,18 @@ try:
 except ImportError:
     _HAS_WANDB = False
 
-# 与 parse.py / sft_dataset.py 流水线一致：默认数据为 tools_sft.jsonl，输出到 train/outputs
+# 与 sft_dataset 流水线一致：训练集 tools_sft.jsonl，验证集默认 eval_sft.jsonl（与训练集无交集）
 _train_dir = Path(__file__).resolve().parent
-DEFAULT_TRAIN_JSONL = _train_dir / "datasets/data/converted_gpt_oss_search_correct.tools_sft.jsonl"
+_datasets_data = _train_dir / "datasets/data"
+DEFAULT_TRAIN_JSONL = _datasets_data / "converted_gpt_oss_search_correct.tools_sft.jsonl"
+DEFAULT_EVAL_JSONL = _datasets_data / "converted_gpt_oss_search_correct.eval_sft.jsonl"
 DEFAULT_OUTPUT_DIR = _train_dir / "outputs/sft_full"
 
 
 def parse_args():
-    p = argparse.ArgumentParser(description="全参数 SFT 训练（无 LoRA），数据默认接 parse → sft_dataset 流水线输出。")
+    p = argparse.ArgumentParser(
+        description="全参数 SFT 训练（无 LoRA）。数据默认接 parse → materialize → sft_dataset 流水线（训练集 tools_sft.jsonl，验证集 eval_sft.jsonl）。"
+    )
     p.add_argument("--model_name_or_path", type=str, required=True, help="基座模型路径或 HuggingFace 名")
     p.add_argument(
         "--train_jsonl",
@@ -43,13 +48,13 @@ def parse_args():
         "--eval_jsonl",
         type=str,
         default=None,
-        help="可选验证集 JSONL；若不提供，则从 train_jsonl 中按 --val_ratio 自动切分验证集",
+        help=f"验证集 JSONL。默认 None：若存在 {DEFAULT_EVAL_JSONL} 则使用，否则按 --val_ratio 从训练集划分",
     )
     p.add_argument(
         "--val_ratio",
         type=float,
         default=0.02,
-        help="当未提供 --eval_jsonl 时，从训练集中划分为验证集的比例（默认 0.02，即 2%）",
+        help="当未提供 --eval_jsonl 且默认 eval_sft.jsonl 不存在时，从训练集中划分验证集的比例（默认 0.02）",
     )
     p.add_argument(
         "--output_dir",
@@ -206,8 +211,12 @@ def main():
     if not os.path.isfile(args.train_jsonl):
         raise FileNotFoundError(
             f"训练数据不存在: {args.train_jsonl}\n"
-            "请先运行: python train/datasets/parse.py && python train/datasets/sft_dataset.py"
+            "请先运行: python train/datasets/parse.py → materialize.py → sft_dataset.py"
         )
+    # 未指定验证集时，若存在默认 eval_sft.jsonl 则使用（与 make_eval_turns 共用）
+    if args.eval_jsonl is None and os.path.isfile(DEFAULT_EVAL_JSONL):
+        args.eval_jsonl = str(DEFAULT_EVAL_JSONL)
+        print(f"使用默认验证集: {args.eval_jsonl}")
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 1) 加载 jsonl
