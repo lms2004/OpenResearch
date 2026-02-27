@@ -325,16 +325,26 @@ def parse_args() -> argparse.Namespace:
     this_dir = Path(__file__).resolve().parent
     repo_root = this_dir.parent.parent
     dataset_dir = repo_root / "OpenResearcher-Dataset"
-    default_parquet_dirs = [
-        dataset_dir / "seed_42",
-        dataset_dir / "seed_43",
-    ]
+    parser.add_argument(
+        "--dataset-dir",
+        type=Path,
+        default=dataset_dir,
+        help="Base directory containing seed_42, seed_43, ... (used with --seeds). Default: OpenResearcher-Dataset/",
+    )
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="*",
+        default=None,
+        metavar="N",
+        help="Seed numbers to include, e.g. --seeds 42 43 44 45. Paths become <dataset-dir>/seed_42, seed_43, ... If given, overrides --parquet.",
+    )
     parser.add_argument(
         "--parquet",
         type=Path,
         nargs="+",
-        default=default_parquet_dirs,
-        help="One or more parquet files or directories. For dirs, all .parquet under each are merged (default: seed_42 + seed_43).",
+        default=None,
+        help="Explicit parquet files or directories. Ignored when --seeds is set. Default when no --seeds: seed_42 + seed_43.",
     )
     parser.add_argument(
         "--template-jsonl",
@@ -378,10 +388,22 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    # args.parquet is a list of paths (one or more)
+    dataset_dir = args.dataset_dir.resolve()
+
+    # 优先用 --seeds 生成路径，否则用 --parquet（或默认 seed_42 + seed_43）
+    if args.seeds is not None and len(args.seeds) > 0:
+        parquet_inputs = [dataset_dir / f"seed_{s}" for s in sorted(args.seeds)]
+    elif args.parquet is not None and len(args.parquet) > 0:
+        parquet_inputs = list(args.parquet)
+    else:
+        parquet_inputs = [
+            dataset_dir / "seed_42",
+            dataset_dir / "seed_43",
+        ]
+
     parquet_paths: list[Path] = []
-    for p in args.parquet:
-        p = p.resolve()
+    for p in parquet_inputs:
+        p = Path(p).resolve()
         if p.is_dir():
             found = sorted(p.rglob("*.parquet"))
             if not found:
@@ -396,7 +418,7 @@ def main() -> None:
 
     if not parquet_paths:
         raise FileNotFoundError(
-            "No .parquet files from any of the given paths. Check --parquet (e.g. OpenResearcher-Dataset/seed_42 seed_43)."
+            "No .parquet files from any of the given paths. Check --dataset-dir/--seeds or --parquet."
         )
     parquet_paths.sort()
 
