@@ -130,7 +130,7 @@ def main():
         args=sft_config,
         train_dataset=ds["train"],
         eval_dataset=ds.get("validation", None),
-        tokenizer=tokenizer,
+        processing_class=tokenizer,
     )
 
     # 7) 开训
