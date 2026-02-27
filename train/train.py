@@ -42,6 +42,9 @@ def parse_args():
     p.add_argument("--bf16", action="store_true")
     p.add_argument("--fp16", action="store_true")
 
+    p.add_argument("--run_name", type=str, default=None, help="wandb 运行名（默认由 output_dir 推断）")
+    p.add_argument("--wandb_project", type=str, default="OpenResearch-SFT", help="wandb 项目名")
+
     # 工具调用数据一般不建议 packing（会把多个对话硬拼到一起，可能影响 tool 结构）
     p.add_argument("--packing", action="store_true", help="谨慎开启；tool calling 数据通常建议关闭")
 
@@ -121,7 +124,10 @@ def main():
 
         bf16=args.bf16,
         fp16=args.fp16,
-        report_to="none",
+        assistant_only_loss=True,
+        report_to="wandb",
+        run_name=args.run_name or Path(args.output_dir).name,
+        project=args.wandb_project,
     )
 
     # 6) Trainer
