@@ -1,3 +1,4 @@
+import argparse
 import json
 from pathlib import Path
 import sys
@@ -13,9 +14,12 @@ from data_utils import get_browser_tools_json_schema
 # 使用统一的工具 JSON schema 生成函数
 TOOLS_JSON_SCHEMA_STR = get_browser_tools_json_schema()
 
-# 与 parse.py 流水线衔接：输入为 parse 输出的 materialized.jsonl，输出为同目录下的 tools_sft.jsonl
+# 与 materialize 流水线衔接：输入为 materialized.jsonl（含 num_generated_tokens），输出为 tools_sft.jsonl
 input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl"
 output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
+
+# 默认按 token 数筛选：超过此值的轨迹不写入（仅当样本有 num_generated_tokens 时生效）
+DEFAULT_MAX_TOKENS = 30000
 
 
 def _normalize_args_id(obj):
@@ -115,7 +119,7 @@ def normalize_messages(raw_messages):
     return normalized
 
 
-def convert():
+def convert(max_tokens: int | None):
     output_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with input_path.open("r", encoding="utf-8") as fin, output_path.open(
@@ -127,9 +131,9 @@ def convert():
                 continue
 
             sample = json.loads(line)
-            # 如果上游 materialize 已经计算了 token 数量，这里再次做一道保险过滤
+            # 如果上游 materialize 已经计算了 token 数量，按 max_tokens 过滤
             num_tokens = sample.get("num_generated_tokens")
-            if isinstance(num_tokens, int) and num_tokens > 30000:
+            if max_tokens is not None and isinstance(num_tokens, int) and num_tokens > max_tokens:
                 continue
             raw_messages = sample["messages"]
 
@@ -147,5 +151,20 @@ def convert():
     print(f"Converted {n} samples -> {output_path}")
 
 
+def main():
+    parser = argparse.ArgumentParser(
+        description="Build tools_sft.jsonl from materialized.jsonl; optionally filter by num_generated_tokens."
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Drop trajectories with num_generated_tokens > this (default: {DEFAULT_MAX_TOKENS}). Set to 0 or negative to disable.",
+    )
+    args = parser.parse_args()
+    max_tokens = args.max_tokens if args.max_tokens > 0 else None
+    convert(max_tokens=max_tokens)
+
+
 if __name__ == "__main__":
-    convert()
+    main()
