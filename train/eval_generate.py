@@ -189,7 +189,13 @@ def main():
 
     # 缓冲区：做批量并发生成
     batch_prompts = []
-    batch_meta = []  # 每个元素: dict with sample, messages, turn_index (None=整段), gold_display, prompt
+    # 每个元素: dict with
+    #   sample_index: 当前对话在 eval_jsonl 中的索引（从 0 开始）
+    #   sample: 原始 sample
+    #   messages: 完整 messages
+    #   turn_index: 当前评估的 assistant 轮次（整段评估时为 None）
+    #   gold_display: 该轮的 gold assistant 文本
+    batch_meta = []
 
     def flush_batch():
         nonlocal total, total_response_chars, table_rows
@@ -201,6 +207,7 @@ def main():
                 continue
             generated_text = out.outputs[0].text
             meta = batch_meta[i]
+            sample_index = meta["sample_index"]
             sample = meta["sample"]
             messages = meta["messages"]
             prompt = batch_prompts[i]
@@ -218,10 +225,11 @@ def main():
             total_response_chars += len(generated_text)
 
             if args.log_wandb and _HAS_WANDB:
-                # 只保留三列核心信息：实际送给模型的 prompt（经过 chat_template）、gold 回复、模型回复
-                prompt_display = (prompt[:2000] + "…") if len(prompt) > 2000 else prompt
+                # 记录 sample_id / turn_index + 核心三列：完整 prompt（经过 chat_template）、gold 回复、模型回复
+                prompt_display = prompt  # 不再截断，便于在 wandb 中查看完整上下文
                 resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
-                table_rows.append([prompt_display, gold_display, resp_display])
+                turn_id = -1 if turn_index is None else turn_index
+                table_rows.append([sample_index, turn_id, prompt_display, gold_display, resp_display])
 
         batch_prompts.clear()
         batch_meta.clear()
@@ -247,6 +255,8 @@ def main():
             if not messages:
                 continue
 
+            # 当前对话在 eval_jsonl 中的索引（从 0 开始），用于 wandb 中区分不同轨迹
+            sample_index = sample_count
             sample_count += 1
 
             tools = load_tools_field(sample)
@@ -273,6 +283,7 @@ def main():
                     gold_display = _assistant_turn_content(m)
                     batch_prompts.append(prompt)
                     batch_meta.append({
+                        "sample_index": sample_index,
                         "sample": sample,
                         "messages": messages,
                         "turn_index": i,
@@ -298,6 +309,7 @@ def main():
                 gold_display = _last_assistant_content(messages)
                 batch_prompts.append(prompt)
                 batch_meta.append({
+                    "sample_index": sample_index,
                     "sample": sample,
                     "messages": messages,
                     "turn_index": None,
@@ -326,7 +338,7 @@ def main():
             "per_turn_eval": args.per_turn_eval,
         })
         table = wandb.Table(
-            columns=["prompt", "gold_assistant", "model_response"],
+            columns=["sample_id", "turn_index", "prompt", "gold_assistant", "model_response"],
             data=table_rows,
         )
         wandb.log({"eval/responses": table})
