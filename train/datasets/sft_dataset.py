@@ -64,12 +64,17 @@ def normalize_messages(raw_messages):
                 # 统一 arguments 内 id 为 str，避免 PyArrow 报 "changed from string to number"
                 if isinstance(parsed_args, dict):
                     parsed_args = _normalize_args_id(parsed_args)
+                # 统一写成 JSON 字符串，避免 PyArrow 报 "changed from object to string"
+                if isinstance(parsed_args, dict):
+                    arguments_out = json.dumps(parsed_args, ensure_ascii=False)
+                else:
+                    arguments_out = parsed_args if isinstance(parsed_args, str) else "{}"
 
                 new_tc = {
                     "type": tc.get("type", "function"),
                     "function": {
                         "name": fn.get("name"),
-                        "arguments": parsed_args,
+                        "arguments": arguments_out,
                     },
                 }
                 new_tool_calls.append(new_tc)
