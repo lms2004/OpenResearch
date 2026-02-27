@@ -182,7 +182,7 @@ def main():
         top_p=args.top_p,
     )
 
-    # 用于 wandb 表格
+    # 用于 wandb 表格：仅记录 prompt / gold / model_response 三列
     table_rows = []
     total = 0
     total_response_chars = 0
@@ -218,11 +218,10 @@ def main():
             total_response_chars += len(generated_text)
 
             if args.log_wandb and _HAS_WANDB:
-                last_user = _last_user_content(messages)
+                # 只保留三列核心信息：实际送给模型的 prompt（经过 chat_template）、gold 回复、模型回复
                 prompt_display = (prompt[:2000] + "…") if len(prompt) > 2000 else prompt
                 resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
-                turn_idx = turn_index if turn_index is not None else -1
-                table_rows.append([total, turn_idx, prompt_display, last_user, gold_display, resp_display])
+                table_rows.append([prompt_display, gold_display, resp_display])
 
         batch_prompts.clear()
         batch_meta.clear()
@@ -327,7 +326,7 @@ def main():
             "per_turn_eval": args.per_turn_eval,
         })
         table = wandb.Table(
-            columns=["sample_id", "turn_index", "prompt", "last_user_message", "gold_assistant", "model_response"],
+            columns=["prompt", "gold_assistant", "model_response"],
             data=table_rows,
         )
         wandb.log({"eval/responses": table})
