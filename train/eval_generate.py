@@ -255,8 +255,9 @@ def main():
             if not messages:
                 continue
 
-            # 当前对话在 eval_jsonl 中的索引（从 0 开始），用于 wandb 中区分不同轨迹
-            sample_index = sample_count
+            # 当前对话在 eval_jsonl 中的索引（从 0 开始），用于 wandb 中区分不同轨迹。
+            # 若样本本身携带 sample_id（例如专门的 eval_turns.jsonl），优先使用该字段。
+            sample_index = sample.get("sample_id", sample_count)
             sample_count += 1
 
             tools = load_tools_field(sample)
@@ -306,7 +307,12 @@ def main():
                 enc = tokenizer(prompt, add_special_tokens=False, return_attention_mask=False)
                 if len(enc["input_ids"]) > 30000:
                     continue
-                gold_display = _last_assistant_content(messages)
+                # 普通 SFT eval：从 messages 中取最后一轮 assistant 作为 gold；
+                # eval_turns 专用文件：直接使用 gold_assistant 字段。
+                if "gold_assistant" in sample:
+                    gold_display = sample.get("gold_assistant", "")
+                else:
+                    gold_display = _last_assistant_content(messages)
                 batch_prompts.append(prompt)
                 batch_meta.append({
                     "sample_index": sample_index,

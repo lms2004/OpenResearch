@@ -13,9 +13,13 @@ from data_utils import get_browser_tools_json_schema
 # 使用统一的工具 JSON schema 生成函数
 TOOLS_JSON_SCHEMA_STR = get_browser_tools_json_schema()
 
-# 与 parse.py 流水线衔接：输入为 parse 输出的 materialized.jsonl，输出为同目录下的 tools_sft.jsonl
+# 与 parse.py 流水线衔接：
+# - 输入为 parse 输出的 materialized.jsonl
+# - 输出 1（训练用）：tools_sft.jsonl（整段多轮对话）
+# - 输出 2（评估用）：tools_sft.eval_turns.jsonl（按 assistant 轮次展开，便于多轮 gold 提取）
 input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl"
 output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
+eval_turns_output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.eval_turns.jsonl"
 
 
 def _normalize_args_id(obj):
@@ -117,10 +121,13 @@ def normalize_messages(raw_messages):
 
 def convert():
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    eval_turns_output_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
-    with input_path.open("r", encoding="utf-8") as fin, output_path.open(
-        "w", encoding="utf-8"
-    ) as fout:
+    n_turns = 0
+    with input_path.open("r", encoding="utf-8") as fin, \
+            output_path.open("w", encoding="utf-8") as fout, \
+            eval_turns_output_path.open("w", encoding="utf-8") as fout_turns:
+        sample_idx = 0
         for line in fin:
             line = line.strip()
             if not line:
@@ -144,7 +151,31 @@ def convert():
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
             n += 1
 
+            # 额外构造「按 assistant 轮次展开」的评估集：
+            # 对每条对话中的每个 assistant 轮（无论是文字还是 tool-calls-only），写一条样本：
+            #   - messages: 截止该轮之前的上下文（不包含 gold 本轮）
+            #   - gold_assistant: 该轮的 gold 文本；若无文本内容但有 tool_calls，则标记为 "[tool_calls]"
+            #   - sample_id / turn_index: 便于在 eval 中对齐原始轨迹与轮次
+            for turn_idx, m in enumerate(messages):
+                if m.get("role") != "assistant":
+                    continue
+                gold_raw = (m.get("content") or "").strip()
+                gold = gold_raw if gold_raw else "[tool_calls]"
+                prefix_messages = messages[:turn_idx]
+                eval_obj = {
+                    "sample_id": sample_idx,
+                    "turn_index": turn_idx,
+                    "messages": prefix_messages,
+                    "gold_assistant": gold,
+                    "tools": TOOLS_JSON_SCHEMA_STR,
+                }
+                fout_turns.write(json.dumps(eval_obj, ensure_ascii=False) + "\n")
+                n_turns += 1
+
+            sample_idx += 1
+
     print(f"Converted {n} samples -> {output_path}")
+    print(f"Converted {n_turns} assistant turns -> {eval_turns_output_path}")
 
 
 if __name__ == "__main__":
