@@ -1,4 +1,5 @@
 import json
+import random
 from pathlib import Path
 import sys
 
@@ -119,27 +120,36 @@ def normalize_messages(raw_messages):
     return normalized
 
 
+MAX_EVAL_TRAJ = 10  # 多轮评估集最多包含多少条完整轨迹（None 表示不过滤）
+
+
 def convert():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     eval_turns_output_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     n_turns = 0
-    with input_path.open("r", encoding="utf-8") as fin, \
-            output_path.open("w", encoding="utf-8") as fout, \
-            eval_turns_output_path.open("w", encoding="utf-8") as fout_turns:
-        sample_idx = 0
-        for line in fin:
-            line = line.strip()
-            if not line:
-                continue
+    # 先把 materialized.jsonl 全部读入内存，方便做轨迹级采样
+    with input_path.open("r", encoding="utf-8") as fin:
+        raw_samples = [json.loads(line) for line in fin if line.strip()]
 
-            sample = json.loads(line)
+    # 训练集仍使用全部样本；多轮评估集只从中随机抽取至多 MAX_EVAL_TRAJ 条轨迹
+    num_traj = len(raw_samples)
+    if MAX_EVAL_TRAJ is None or MAX_EVAL_TRAJ >= num_traj:
+        eval_traj_indices = set(range(num_traj))
+    else:
+        # 固定一个种子，保证每次生成评估集可复现；如需完全随机，可去掉 seed 设置
+        random.seed(42)
+        eval_traj_indices = set(random.sample(range(num_traj), k=MAX_EVAL_TRAJ))
+
+    with output_path.open("w", encoding="utf-8") as fout, \
+            eval_turns_output_path.open("w", encoding="utf-8") as fout_turns:
+        for sample_idx, sample in enumerate(raw_samples):
             # 如果上游 materialize 已经计算了 token 数量，这里再次做一道保险过滤
             num_tokens = sample.get("num_generated_tokens")
             if isinstance(num_tokens, int) and num_tokens > 30000:
                 continue
-            raw_messages = sample["messages"]
 
+            raw_messages = sample["messages"]
             messages = normalize_messages(raw_messages)
 
             out_obj = {
@@ -150,6 +160,10 @@ def convert():
 
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
             n += 1
+
+            # 只有被选中的轨迹才写入多轮评估集
+            if sample_idx not in eval_traj_indices:
+                continue
 
             # 额外构造「按 assistant 轮次展开」的评估集：
             # 对每条对话中的每个 assistant 轮（无论是文字还是 tool-calls-only），写一条样本：
@@ -171,8 +185,6 @@ def convert():
                 }
                 fout_turns.write(json.dumps(eval_obj, ensure_ascii=False) + "\n")
                 n_turns += 1
-
-            sample_idx += 1
 
     print(f"Converted {n} samples -> {output_path}")
     print(f"Converted {n_turns} assistant turns -> {eval_turns_output_path}")
