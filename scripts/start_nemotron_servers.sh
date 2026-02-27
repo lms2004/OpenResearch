@@ -28,27 +28,33 @@ export HF_ENDPOINT="https://hf-mirror.com"
 
 # -----------------------------
 # 2) 自动下载模型到本地（目录存在则跳过/断点续传）
-#    - 如果传入的是 repo（包含 "/"），默认本地目录=同名相对路径 ./org/repo
-#    - 如果传入的是本地路径（不包含 "/" 或者是绝对路径），则直接用它作为模型目录
+#    - 绝对路径（以 / 开头）或已存在的目录 → 视为本地模型，不下载
+#    - 否则视为 HuggingFace repo（如 org/repo），自动下载到同名本地目录
 # -----------------------------
-MODEL_REPO="$MODEL_INPUT"
-LOCAL_DIR=""
+MODEL_REPO=""
+LOCAL_DIR="$MODEL_INPUT"
 
-if [[ "$MODEL_INPUT" == *"/"* ]]; then
-    # repo id，例如 OpenResearcher/OpenResearcher-30B-A3B
-    LOCAL_DIR="$MODEL_INPUT"  # 相对项目根目录
-else
-    # 本地目录（相对或绝对）
-    LOCAL_DIR="$MODEL_INPUT"
-    # 如果是本地目录就不强制下载（因为不知道 repo 是啥）
+if [[ "$MODEL_INPUT" = /* ]]; then
+    # 绝对路径：一定是本地目录
+    LOCAL_ABS="$MODEL_INPUT"
     MODEL_REPO=""
-fi
-
-# 计算绝对路径，供 vLLM 使用更稳
-if [[ "$LOCAL_DIR" = /* ]]; then
-    LOCAL_ABS="$LOCAL_DIR"
+elif [[ -d "$PROJECT_ROOT/$MODEL_INPUT" ]]; then
+    # 相对路径且存在：本地目录
+    LOCAL_ABS="$PROJECT_ROOT/$MODEL_INPUT"
+    MODEL_REPO=""
+elif [[ -d "$MODEL_INPUT" ]]; then
+    # 当前目录下的相对路径且存在
+    LOCAL_ABS="$(cd "$MODEL_INPUT" && pwd)"
+    MODEL_REPO=""
 else
-    LOCAL_ABS="$PROJECT_ROOT/$LOCAL_DIR"
+    # 视为 HuggingFace repo（如 OpenResearcher/OpenResearcher-30B-A3B）
+    LOCAL_DIR="$MODEL_INPUT"
+    if [[ "$LOCAL_DIR" = /* ]]; then
+        LOCAL_ABS="$LOCAL_DIR"
+    else
+        LOCAL_ABS="$PROJECT_ROOT/$LOCAL_DIR"
+    fi
+    MODEL_REPO="$MODEL_INPUT"
 fi
 
 # 若是 repo 模式，则执行 huggingface-cli download（支持断点续传；目录存在会复用已下载文件）
@@ -66,6 +72,13 @@ if [ -n "$MODEL_REPO" ]; then
     # - --resume-download：断点续传/已存在文件会复用
     # - 如果目录已存在且文件齐全，会很快跳过
     huggingface-cli download --resume-download "$MODEL_REPO" --local-dir "$LOCAL_ABS"
+    echo ""
+else
+    echo "=========================================="
+    echo "使用本地模型（跳过下载）"
+    echo "=========================================="
+    echo "Model path: $LOCAL_ABS"
+    echo "=========================================="
     echo ""
 fi
 
