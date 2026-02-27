@@ -337,7 +337,12 @@ def parse_args() -> argparse.Namespace:
         nargs="*",
         default=None,
         metavar="N",
-        help="Seed numbers to include, e.g. --seeds 42 43 44 45. Paths become <dataset-dir>/seed_42, seed_43, ... If given, overrides --parquet.",
+        help="Seed numbers to include, e.g. --seeds 42 43 44 45. Paths become <dataset-dir>/seed_N. Use --all-seeds to include every seed_* under dataset-dir.",
+    )
+    parser.add_argument(
+        "--all-seeds",
+        action="store_true",
+        help="Include all seed_* directories under --dataset-dir (discovered automatically). Overrides --seeds.",
     )
     parser.add_argument(
         "--parquet",
@@ -386,12 +391,33 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _discover_seed_dirs(dataset_dir: Path) -> list[Path]:
+    """Find all seed_* directories under dataset_dir, sorted by seed number."""
+    out: list[tuple[int, Path]] = []
+    for d in dataset_dir.iterdir():
+        if d.is_dir() and d.name.startswith("seed_"):
+            try:
+                n = int(d.name[5:])
+                out.append((n, d))
+            except ValueError:
+                continue
+    out.sort(key=lambda x: x[0])
+    return [p for _, p in out]
+
+
 def main() -> None:
     args = parse_args()
     dataset_dir = args.dataset_dir.resolve()
 
-    # 优先用 --seeds 生成路径，否则用 --parquet（或默认 seed_42 + seed_43）
-    if args.seeds is not None and len(args.seeds) > 0:
+    # --all-seeds > --seeds > --parquet > 默认 seed_42 + seed_43
+    if args.all_seeds:
+        parquet_inputs = _discover_seed_dirs(dataset_dir)
+        if not parquet_inputs:
+            raise FileNotFoundError(
+                f"No seed_* directories under {dataset_dir}. Check --dataset-dir."
+            )
+        print(f"Using all seeds under {dataset_dir}: {[p.name for p in parquet_inputs]}")
+    elif args.seeds is not None and len(args.seeds) > 0:
         parquet_inputs = [dataset_dir / f"seed_{s}" for s in sorted(args.seeds)]
     elif args.parquet is not None and len(args.parquet) > 0:
         parquet_inputs = list(args.parquet)
