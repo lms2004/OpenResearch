@@ -81,6 +81,14 @@ def parse_args():
     # 工具调用数据一般不建议 packing（会把多个对话硬拼到一起，可能影响 tool 结构）
     p.add_argument("--packing", action="store_true", help="谨慎开启；tool calling 数据通常建议关闭")
 
+    # 数据集预处理（tokenization 等）使用的进程数，用于加速 "Tokenizing train dataset" 这一步
+    p.add_argument(
+        "--dataset_num_proc",
+        type=int,
+        default=4,
+        help="tokenize/预处理数据时使用的进程数（默认 4，可按 CPU 核心数调大）",
+    )
+
     # 训练时在每次 eval 后采样若干条验证集，生成模型响应并记入 wandb 表格，便于查看
     p.add_argument("--log_eval_responses_wandb", action="store_true",
                    help="每次评估后对验证集采样生成回复，并记录到 wandb 表格（需提供 --eval_jsonl）")
@@ -145,9 +153,10 @@ class EvalResponseLoggingCallback(TrainerCallback):
         self.max_new_tokens = max_new_tokens
         self.max_length = max_length
 
-    def on_evaluate(self, args, state, model, **kwargs):
+    def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not _HAS_WANDB or self.num_samples <= 0 or state.global_step <= 0:
             return
+        model = self.trainer.model
         model.eval()
         device = next(model.parameters()).device
         table_rows = []
@@ -260,6 +269,7 @@ def main():
         output_dir=args.output_dir,
         max_length=args.max_seq_length,
         packing=args.packing,
+        dataset_num_proc=args.dataset_num_proc,
 
         per_device_train_batch_size=args.per_device_train_batch_size,
         per_device_eval_batch_size=args.per_device_eval_batch_size,
