@@ -6,10 +6,12 @@ from __future__ import annotations
 import argparse
 import json
 from collections import deque
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 
 def load_template_tools(template_jsonl: Path) -> list[dict[str, Any]]:
@@ -175,6 +177,32 @@ def convert_messages_to_target_format(
     return out_messages
 
 
+def _count_parquet_rows(path: Path) -> int:
+    """Return number of rows in a parquet file (from metadata)."""
+    return pq.ParquetFile(path).metadata.num_rows
+
+
+def _convert_one_parquet(
+    path: Path,
+    template_tools: list[dict[str, Any]],
+    default_correct: bool,
+    batch_size: int,
+) -> list[dict[str, Any]]:
+    """Convert a single parquet file to a list of records (for parallel workers)."""
+    records: list[dict[str, Any]] = []
+    parquet = pq.ParquetFile(path)
+    for batch in parquet.iter_batches(batch_size=batch_size):
+        for row in batch.to_pylist():
+            record = dict(row)
+            record["messages"] = convert_messages_to_target_format(
+                record.get("messages", [])
+            )
+            record.setdefault("correct", default_correct)
+            record.setdefault("tools", template_tools)
+            records.append(record)
+    return records
+
+
 def convert_parquet_to_jsonl(
     parquet_paths: list[Path],
     output_jsonl_path: Path,
@@ -183,6 +211,7 @@ def convert_parquet_to_jsonl(
     default_correct: bool,
     batch_size: int = 128,
     pretty_limit: int = 50,
+    workers: int = 1,
 ) -> int:
     """Convert parquet record(s) to one JSONL and optional pretty JSON array.
     If multiple paths are given, all are read in order and merged into one output.
@@ -195,36 +224,94 @@ def convert_parquet_to_jsonl(
     total_rows = 0
     pretty_rows = 0
 
-    with output_jsonl_path.open("w", encoding="utf-8") as out_jsonl:
-        out_pretty = None
-        if output_pretty_json_path is not None:
-            output_pretty_json_path.parent.mkdir(parents=True, exist_ok=True)
-            out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
-            out_pretty.write("[\n")
+    if workers <= 1:
+        # Sequential: one progress bar over rows
+        total_from_meta = sum(_count_parquet_rows(p) for p in parquet_paths)
+        with output_jsonl_path.open("w", encoding="utf-8") as out_jsonl:
+            out_pretty = None
+            if output_pretty_json_path is not None:
+                output_pretty_json_path.parent.mkdir(parents=True, exist_ok=True)
+                out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
+                out_pretty.write("[\n")
 
-        for parquet_path in parquet_paths:
-            parquet = pq.ParquetFile(parquet_path)
-            for batch in parquet.iter_batches(batch_size=batch_size):
-                for row in batch.to_pylist():
-                    record = dict(row)
-                    record["messages"] = convert_messages_to_target_format(
-                        record.get("messages", [])
+            pbar = tqdm(total=total_from_meta, unit="row", desc="Converting")
+            for parquet_path in parquet_paths:
+                parquet = pq.ParquetFile(parquet_path)
+                for batch in parquet.iter_batches(batch_size=batch_size):
+                    for row in batch.to_pylist():
+                        record = dict(row)
+                        record["messages"] = convert_messages_to_target_format(
+                            record.get("messages", [])
+                        )
+                        record.setdefault("correct", default_correct)
+                        record.setdefault("tools", template_tools)
+                        out_jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+                        if out_pretty is not None and pretty_rows < pretty_limit:
+                            if pretty_rows > 0:
+                                out_pretty.write(",\n")
+                            out_pretty.write(
+                                json.dumps(record, ensure_ascii=False, indent=2)
+                            )
+                            pretty_rows += 1
+
+                        total_rows += 1
+                        pbar.update(1)
+                    pbar.refresh()
+            pbar.close()
+
+            if out_pretty is not None:
+                out_pretty.write("\n]\n")
+                out_pretty.close()
+    else:
+        # Parallel: convert files in parallel, then write in order
+        with output_jsonl_path.open("w", encoding="utf-8") as out_jsonl:
+            out_pretty = None
+            if output_pretty_json_path is not None:
+                output_pretty_json_path.parent.mkdir(parents=True, exist_ok=True)
+                out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
+                out_pretty.write("[\n")
+
+            with ProcessPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(
+                        _convert_one_parquet,
+                        p,
+                        template_tools,
+                        default_correct,
+                        batch_size,
+                    ): i
+                    for i, p in enumerate(parquet_paths)
+                }
+                # Collect results in order of parquet_paths
+                results_by_idx: dict[int, list[dict[str, Any]]] = {}
+                with tqdm(
+                    total=len(parquet_paths),
+                    unit="file",
+                    desc="Converting",
+                ) as pbar:
+                    for future in as_completed(futures):
+                        idx = futures[future]
+                        results_by_idx[idx] = future.result()
+                        pbar.update(1)
+
+            for i in range(len(parquet_paths)):
+                for record in results_by_idx[i]:
+                    out_jsonl.write(
+                        json.dumps(record, ensure_ascii=False) + "\n"
                     )
-                    record.setdefault("correct", default_correct)
-                    record.setdefault("tools", template_tools)
-                    out_jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
-
                     if out_pretty is not None and pretty_rows < pretty_limit:
                         if pretty_rows > 0:
                             out_pretty.write(",\n")
-                        out_pretty.write(json.dumps(record, ensure_ascii=False, indent=2))
+                        out_pretty.write(
+                            json.dumps(record, ensure_ascii=False, indent=2)
+                        )
                         pretty_rows += 1
-
                     total_rows += 1
 
-        if out_pretty is not None:
-            out_pretty.write("\n]\n")
-            out_pretty.close()
+            if out_pretty is not None:
+                out_pretty.write("\n]\n")
+                out_pretty.close()
 
     return total_rows
 
@@ -279,6 +366,13 @@ def parse_args() -> argparse.Namespace:
         default=128,
         help="Parquet reading batch size.",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        metavar="N",
+        help="Number of parallel workers to convert parquet files (default: 1 = sequential).",
+    )
     return parser.parse_args()
 
 
@@ -313,6 +407,7 @@ def main() -> None:
         template_jsonl_path=args.template_jsonl,
         default_correct=args.default_correct,
         batch_size=args.batch_size,
+        workers=args.workers,
     )
     if args.output_pretty_json is not None:
         print(
