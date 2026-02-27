@@ -92,6 +92,11 @@ def main():
 
     # 4) 模型与 tokenizer
     tokenizer = AutoTokenizer.from_pretrained(args.model_name_or_path, trust_remote_code=True)
+    # 与数据流水线保持一致：自动加载 all_assistant.jinja 作为 chat template
+    chat_template_path = _train_dir / "datasets/templates/all_assistant.jinja"
+    if not chat_template_path.is_file():
+        raise FileNotFoundError(f"chat template 不存在: {chat_template_path}")
+    tokenizer.chat_template = chat_template_path.read_text(encoding="utf-8")
     # 避免某些模型没有 pad_token 导致 Trainer 报错
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -124,7 +129,7 @@ def main():
 
         bf16=args.bf16,
         fp16=args.fp16,
-        assistant_only_loss=False,
+        assistant_only_loss=True,
         report_to="wandb",
         run_name=args.run_name or Path(args.output_dir).name,
         project=args.wandb_project,
