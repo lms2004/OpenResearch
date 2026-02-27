@@ -1,5 +1,6 @@
 import argparse
 import json
+import random
 from pathlib import Path
 import sys
 
@@ -14,12 +15,18 @@ from data_utils import get_browser_tools_json_schema
 # 使用统一的工具 JSON schema 生成函数
 TOOLS_JSON_SCHEMA_STR = get_browser_tools_json_schema()
 
-# 与 materialize 流水线衔接：输入为 materialized.jsonl（含 num_generated_tokens），输出为 tools_sft.jsonl
+# 与 materialize 流水线衔接：输入为 materialized.jsonl（含 num_generated_tokens），输出为 tools_sft.jsonl（训练集）+ 一份评估集（与训练集无交集，供 train.py 验证与 make_eval_turns 共用）
 input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl"
 output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
+# 评估集只写一份，SFT 格式（messages + tools + num_generated_tokens），train.py 与 make_eval_turns.py 共用同一路径
+eval_sft_path = this_dir / "data/converted_gpt_oss_search_correct.eval_sft.jsonl"
+eval_pool_path = eval_sft_path
 
 # 默认按 token 数筛选：超过此值的轨迹不写入（仅当样本有 num_generated_tokens 时生效）
 DEFAULT_MAX_TOKENS = 30000
+# 默认从通过筛选的样本中划分 5% 作为评估池（与训练集无交集），供 make_eval_turns.py 使用
+DEFAULT_EVAL_RATIO = 0.05
+DEFAULT_EVAL_SEED = 42
 
 
 def _normalize_args_id(obj):
@@ -119,41 +126,74 @@ def normalize_messages(raw_messages):
     return normalized
 
 
-def convert(max_tokens: int | None):
+def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DEFAULT_EVAL_SEED):
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    n = 0
-    with input_path.open("r", encoding="utf-8") as fin, output_path.open(
-        "w", encoding="utf-8"
-    ) as fout:
+
+    # 1) 读取并过滤
+    samples = []
+    with input_path.open("r", encoding="utf-8") as fin:
         for line in fin:
             line = line.strip()
             if not line:
                 continue
-
             sample = json.loads(line)
-            # 如果上游 materialize 已经计算了 token 数量，按 max_tokens 过滤
             num_tokens = sample.get("num_generated_tokens")
             if max_tokens is not None and isinstance(num_tokens, int) and num_tokens > max_tokens:
                 continue
+            samples.append(sample)
+
+    n = len(samples)
+    if n == 0:
+        print("No samples after filtering, abort.")
+        return
+
+    # 2) 划分 train / eval（固定 seed，保证可复现且评估集不与训练集重叠）
+    rng = random.Random(eval_seed)
+    indices = list(range(n))
+    rng.shuffle(indices)
+    n_eval = max(0, int(round(n * eval_ratio))) if eval_ratio > 0 else 0
+    eval_indices = set(indices[:n_eval])
+    train_indices = set(indices[n_eval:])
+
+    # 3) 写训练集 tools_sft.jsonl（仅 train 部分）
+    n_train = 0
+    with output_path.open("w", encoding="utf-8") as fout:
+        for i in train_indices:
+            sample = samples[i]
             raw_messages = sample["messages"]
-
             messages = normalize_messages(raw_messages)
-
             out_obj = {
                 "messages": messages,
-                # 工具按照 transformers / TRL 推荐存成 JSON str
                 "tools": TOOLS_JSON_SCHEMA_STR,
             }
-
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
-            n += 1
+            n_train += 1
 
-    print(f"Converted {n} samples -> {output_path}")
+    # 4) 写评估集（仅一份，SFT 格式 + num_generated_tokens，供 train.py 与 make_eval_turns.py 共用）
+    if eval_indices:
+        eval_sft_path.parent.mkdir(parents=True, exist_ok=True)
+        with eval_sft_path.open("w", encoding="utf-8") as fout:
+            for i in sorted(eval_indices):
+                sample = samples[i]
+                messages = normalize_messages(sample["messages"])
+                out_obj = {
+                    "messages": messages,
+                    "tools": TOOLS_JSON_SCHEMA_STR,
+                }
+                if "num_generated_tokens" in sample:
+                    out_obj["num_generated_tokens"] = sample["num_generated_tokens"]
+                fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
+        print(f"Converted {n_train} train samples -> {output_path}")
+        print(f"Eval {len(eval_indices)} samples -> {eval_sft_path} (train.py --eval_jsonl & make_eval_turns.py --input)")
+    else:
+        print(f"Converted {n_train} train samples -> {output_path}")
+        if eval_ratio > 0:
+            print("Eval ratio yielded 0 eval samples; run make_eval_turns with --input to a dedicated eval JSONL if needed.")
 
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Build tools_sft.jsonl from materialized.jsonl; optionally filter by num_generated_tokens."
+        description="Build tools_sft.jsonl (train) and eval_sft.jsonl (eval) from materialized.jsonl; train/eval split avoids leakage; eval set is shared by train.py and make_eval_turns.py."
     )
     parser.add_argument(
         "--max-tokens",
@@ -161,9 +201,21 @@ def main():
         default=DEFAULT_MAX_TOKENS,
         help=f"Drop trajectories with num_generated_tokens > this (default: {DEFAULT_MAX_TOKENS}). Set to 0 or negative to disable.",
     )
+    parser.add_argument(
+        "--eval-ratio",
+        type=float,
+        default=DEFAULT_EVAL_RATIO,
+        help=f"Fraction of (filtered) samples for eval set (default: {DEFAULT_EVAL_RATIO}). Written to eval_sft.jsonl.",
+    )
+    parser.add_argument(
+        "--eval-seed",
+        type=int,
+        default=DEFAULT_EVAL_SEED,
+        help=f"Random seed for train/eval split (default: {DEFAULT_EVAL_SEED}).",
+    )
     args = parser.parse_args()
     max_tokens = args.max_tokens if args.max_tokens > 0 else None
-    convert(max_tokens=max_tokens)
+    convert(max_tokens=max_tokens, eval_ratio=args.eval_ratio, eval_seed=args.eval_seed)
 
 
 if __name__ == "__main__":

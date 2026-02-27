@@ -2,10 +2,9 @@
 # -*- coding: utf-8 -*-
 
 """
-从 materialized.jsonl 中单独拆分出多轮轨迹评估集：
-- 单位：轨迹 sample_id × assistant turn_index
-- 每条样本包含：到该轮为止的 messages 前缀 + gold_assistant
-- 仅随机抽取最多 MAX_EVAL_TRAJ 条轨迹的全部轮次，方便在 eval_generate.py 中做多轮可视化评估。
+从评估集（eval_sft.jsonl，与 train.py 验证集同一文件）中拆分出多轮轨迹评估集，保证与训练集无交集：
+- 必须先运行 sft_dataset.py 生成 eval_sft.jsonl，再运行本脚本。
+- 单位：轨迹 sample_id × assistant turn_index；每条样本包含 messages 前缀 + gold_assistant。
 - 可按 num_generated_tokens 筛选轨迹（--max-tokens）。
 """
 
@@ -18,7 +17,8 @@ from pathlib import Path
 this_dir = Path(__file__).resolve().parent
 DATA_DIR = this_dir / "data"
 
-INPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.materialized.jsonl"
+# 默认从 sft_dataset.py 产出的评估集读取（与 train.py 验证集为同一文件）
+INPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.eval_sft.jsonl"
 OUTPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.tools_sft.eval_turns.jsonl"
 
 MAX_EVAL_TRAJ = 10          # 最多选多少条轨迹（None 表示不过滤）
@@ -49,13 +49,16 @@ def normalize_messages(raw_messages):
     return normalized
 
 
-def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ) -> None:
-    if not INPUT_PATH.is_file():
-        raise FileNotFoundError(f"INPUT not found: {INPUT_PATH}")
+def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ, input_path: Path = INPUT_PATH, output_path: Path = OUTPUT_PATH) -> None:
+    if not input_path.is_file():
+        raise FileNotFoundError(
+            f"Eval pool not found: {input_path}\n"
+            "Run sft_dataset.py first to produce eval_sft.jsonl (train/eval split)."
+        )
 
-    # 1) 读取原始 materialized 样本，并按 num_generated_tokens 过滤过长轨迹
+    # 1) 读取评估池样本，并按 num_generated_tokens 过滤过长轨迹
     raw_samples = []
-    with INPUT_PATH.open("r", encoding="utf-8") as f:
+    with input_path.open("r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -81,10 +84,10 @@ def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ) -> None:
     keep_indices_set = set(keep_indices)
 
     # 3) 展开为 (sample_id, turn_index) 级别的多轮评估样本
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     n_turns = 0
 
-    with OUTPUT_PATH.open("w", encoding="utf-8") as fout:
+    with output_path.open("w", encoding="utf-8") as fout:
         for sample_idx, sample in enumerate(raw_samples):
             if sample_idx not in keep_indices_set:
                 continue
@@ -139,12 +142,24 @@ def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ) -> None:
                 n_turns += 1
 
     print(f"Picked {len(keep_indices_set)} trajectories out of {num_traj}")
-    print(f"Wrote {n_turns} assistant turns -> {OUTPUT_PATH}")
+    print(f"Wrote {n_turns} assistant turns -> {output_path}")
 
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Build eval turns from materialized.jsonl; filter trajectories by num_generated_tokens."
+        description="Build eval turns from eval_sft.jsonl (run sft_dataset.py first). Same file as train.py validation set."
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=INPUT_PATH,
+        help="Input JSONL: eval set only (default: eval_sft.jsonl, same as train.py --eval_jsonl).",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUTPUT_PATH,
+        help=f"Output eval turns JSONL (default: {OUTPUT_PATH}).",
     )
     parser.add_argument(
         "--max-tokens",
@@ -164,4 +179,4 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     max_tokens = args.max_tokens if args.max_tokens > 0 else None
-    main(max_tokens=max_tokens, max_traj=args.max_traj)
+    main(max_tokens=max_tokens, max_traj=args.max_traj, input_path=args.input, output_path=args.output)
