@@ -270,7 +270,6 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(
         args.model_name_or_path,
         trust_remote_code=True,
-        device_map="auto",
     )
 
     # 5) SFT 配置
