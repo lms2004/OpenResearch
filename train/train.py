@@ -33,11 +33,30 @@ DEFAULT_OUTPUT_DIR = _train_dir / "outputs/sft_full"
 def parse_args():
     p = argparse.ArgumentParser(description="全参数 SFT 训练（无 LoRA），数据默认接 parse → sft_dataset 流水线输出。")
     p.add_argument("--model_name_or_path", type=str, required=True, help="基座模型路径或 HuggingFace 名")
-    p.add_argument("--train_jsonl", type=str, default=str(DEFAULT_TRAIN_JSONL),
-                   help=f"训练 JSONL（默认: {DEFAULT_TRAIN_JSONL}）")
-    p.add_argument("--eval_jsonl", type=str, default=None, help="可选验证集 JSONL")
-    p.add_argument("--output_dir", type=str, default=str(DEFAULT_OUTPUT_DIR),
-                   help=f" checkpoint 输出目录（默认: {DEFAULT_OUTPUT_DIR}）")
+    p.add_argument(
+        "--train_jsonl",
+        type=str,
+        default=str(DEFAULT_TRAIN_JSONL),
+        help=f"训练 JSONL（默认: {DEFAULT_TRAIN_JSONL}）",
+    )
+    p.add_argument(
+        "--eval_jsonl",
+        type=str,
+        default=None,
+        help="可选验证集 JSONL；若不提供，则从 train_jsonl 中按 --val_ratio 自动切分验证集",
+    )
+    p.add_argument(
+        "--val_ratio",
+        type=float,
+        default=0.02,
+        help="当未提供 --eval_jsonl 时，从训练集中划分为验证集的比例（默认 0.02，即 2%）",
+    )
+    p.add_argument(
+        "--output_dir",
+        type=str,
+        default=str(DEFAULT_OUTPUT_DIR),
+        help=f" checkpoint 输出目录（默认: {DEFAULT_OUTPUT_DIR}）",
+    )
 
     p.add_argument("--max_seq_length", type=int, default=4096)
     p.add_argument("--per_device_train_batch_size", type=int, default=1)
@@ -187,11 +206,31 @@ def main():
         data_files["validation"] = args.eval_jsonl
     ds = load_dataset("json", data_files=data_files)
 
+    # 如果用户没有显式提供 eval_jsonl，就从训练集中按比例切出一部分作为验证集
+    if not args.eval_jsonl:
+        full_train = ds["train"]
+        # 保底：样本太少时避免切出空验证集
+        if len(full_train) >= 10 and 0.0 < args.val_ratio < 1.0:
+            split = full_train.train_test_split(test_size=args.val_ratio, seed=42)
+            ds_train = split["train"]
+            ds_val = split["test"]
+            print(f"自动从训练集中划分验证集: 总样本={len(full_train)}, "
+                  f"train={len(ds_train)}, val={len(ds_val)}, 比例={args.val_ratio}")
+        else:
+            ds_train = full_train
+            ds_val = None
+            print("样本量过小或 val_ratio 非法，跳过自动划分验证集，仅使用训练集。")
+    else:
+        ds_train = ds["train"]
+        ds_val = ds.get("validation", None)
+
     # 2) 统一把 tools 转成 JSON string（如果需要）
-    ds = ds.map(ensure_tools_is_json_str)
+    ds_train = ds_train.map(ensure_tools_is_json_str)
+    if ds_val is not None:
+        ds_val = ds_val.map(ensure_tools_is_json_str)
 
     # 3) 基本字段检查
-    cols = ds["train"].column_names
+    cols = ds_train.column_names
     if "messages" not in cols:
         raise ValueError(f"你的数据缺少 'messages' 列，当前列：{cols}")
     # tools 列：强烈建议有（tool calling 场景）
@@ -216,6 +255,7 @@ def main():
     )
 
     # 5) SFT 配置
+    has_validation = ds_val is not None
     sft_config = SFTConfig(
         output_dir=args.output_dir,
         max_length=args.max_seq_length,
@@ -232,8 +272,8 @@ def main():
 
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        eval_strategy="steps" if args.eval_jsonl else "no",
-        eval_steps=args.eval_steps if args.eval_jsonl else None,
+        eval_strategy="steps" if has_validation else "no",
+        eval_steps=args.eval_steps if has_validation else None,
 
         bf16=args.bf16,
         fp16=args.fp16,
@@ -245,26 +285,26 @@ def main():
 
     # 6) Trainer
     callbacks = []
-    if args.log_eval_responses_wandb and args.eval_jsonl and ds.get("validation") is not None and _HAS_WANDB:
+    if args.log_eval_responses_wandb and has_validation and _HAS_WANDB:
         callbacks.append(
             EvalResponseLoggingCallback(
                 tokenizer=tokenizer,
-                eval_dataset=ds["validation"],
+                eval_dataset=ds_val,
                 num_samples=args.eval_response_samples,
                 max_new_tokens=args.eval_response_max_new_tokens,
                 max_length=args.max_seq_length,
             )
         )
-    elif args.log_eval_responses_wandb and (not args.eval_jsonl or ds.get("validation") is None):
-        print("⚠️ --log_eval_responses_wandb 已指定但未提供验证集（--eval_jsonl），已忽略。")
+    elif args.log_eval_responses_wandb and not has_validation:
+        print("⚠️ --log_eval_responses_wandb 已指定但没有有效的验证集（既未提供 --eval_jsonl，也未成功自动划分），已忽略。")
     elif args.log_eval_responses_wandb and not _HAS_WANDB:
         print("⚠️ --log_eval_responses_wandb 已指定但未安装 wandb，已忽略。可执行: pip install wandb")
 
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
-        train_dataset=ds["train"],
-        eval_dataset=ds.get("validation", None),
+        train_dataset=ds_train,
+        eval_dataset=ds_val,
         processing_class=tokenizer,
         callbacks=callbacks,
     )
