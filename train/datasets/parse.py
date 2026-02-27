@@ -250,14 +250,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-jsonl",
         type=Path,
-        default=this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl",
+        default=this_dir / "data/converted_gpt_oss_search_correct.parsed.jsonl",
         help="Output JSONL file path.",
     )
     parser.add_argument(
         "--output-pretty-json",
         type=Path,
-        default=this_dir
-        / "data/converted_gpt_oss_search_correct.materialized.pretty.json",
+        default=this_dir / "data/converted_gpt_oss_search_correct.parsed.pretty.json",
         help="Pretty-printed JSON array output path.",
     )
     parser.add_argument(

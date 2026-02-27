@@ -112,11 +112,14 @@ def _process_task_mp(task: Tuple[int, str]):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--input", required=True, help="Input JSONL path (e.g. parse.py output).")
-    parser.add_argument("--output", required=True, help="Output JSONL path (same schema + num_generated_tokens).")
+    this_dir = Path(__file__).resolve().parent
+    data_dir = this_dir / "data"
+    default_input = data_dir / "converted_gpt_oss_search_correct.parsed.jsonl"
+    default_output = data_dir / "converted_gpt_oss_search_correct.materialized.jsonl"
+    parser.add_argument("--input", default=str(default_input), help="Input JSONL path (e.g. parse.py output).")
+    parser.add_argument("--output", default=str(default_output), help="Output JSONL path (same schema + num_generated_tokens).")
     parser.add_argument("--tokenizer-model", required=True, help="HF tokenizer model/path.")
     # Default to train/datasets/templates/all_assistant.jinja
-    this_dir = Path(__file__).resolve().parent
     default_template = this_dir / "templates" / "all_assistant.jinja"
     parser.add_argument(
         "--chat-template-file",
