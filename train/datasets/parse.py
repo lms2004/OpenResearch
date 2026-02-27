@@ -182,6 +182,7 @@ def convert_parquet_to_jsonl(
     template_jsonl_path: Path | None,
     default_correct: bool,
     batch_size: int = 128,
+    pretty_limit: int = 50,
 ) -> int:
     """Convert parquet records to JSONL and optional pretty JSON array."""
     template_tools: list[dict[str, Any]] = []
@@ -190,10 +191,13 @@ def convert_parquet_to_jsonl(
 
     parquet = pq.ParquetFile(parquet_path)
     total_rows = 0
+    pretty_rows = 0
 
+    output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with output_jsonl_path.open("w", encoding="utf-8") as out_jsonl:
         out_pretty = None
         if output_pretty_json_path is not None:
+            output_pretty_json_path.parent.mkdir(parents=True, exist_ok=True)
             out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
             out_pretty.write("[\n")
 
@@ -207,10 +211,11 @@ def convert_parquet_to_jsonl(
                 record.setdefault("tools", template_tools)
                 out_jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                if out_pretty is not None:
-                    if total_rows > 0:
+                if out_pretty is not None and pretty_rows < pretty_limit:
+                    if pretty_rows > 0:
                         out_pretty.write(",\n")
                     out_pretty.write(json.dumps(record, ensure_ascii=False, indent=2))
+                    pretty_rows += 1
 
                 total_rows += 1
 
@@ -225,36 +230,34 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Convert parquet to example-style JSONL."
     )
+
+    # Use paths relative to this file's directory (train/datasets)
+    this_dir = Path(__file__).resolve().parent
+    repo_root = this_dir.parent.parent
     parser.add_argument(
         "--parquet",
         type=Path,
-        default=Path(
-            "./OpenResearcher-Dataset/seed_42/train-00000-of-00003.parquet"
-        ),
+        default=repo_root
+        / "OpenResearcher-Dataset/seed_42/train-00000-of-00003.parquet",
         help="Input parquet file path.",
     )
     parser.add_argument(
         "--template-jsonl",
         type=Path,
-        default=Path(
-            "./data/converted_gpt_oss_search_correct.example.jsonl"
-        ),
+        default=this_dir / "templates/converted_gpt_oss_search_correct.example.jsonl",
         help="Template JSONL (first line used to copy `tools` structure).",
     )
     parser.add_argument(
         "--output-jsonl",
         type=Path,
-        default=Path(
-            "./data/converted_gpt_oss_search_correct.materialized.jsonl"
-        ),
+        default=this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl",
         help="Output JSONL file path.",
     )
     parser.add_argument(
         "--output-pretty-json",
         type=Path,
-        default=Path(
-            "./data/converted_gpt_oss_search_correct.materialized.pretty.json"
-        ),
+        default=this_dir
+        / "data/converted_gpt_oss_search_correct.materialized.pretty.json",
         help="Pretty-printed JSON array output path.",
     )
     parser.add_argument(

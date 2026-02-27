@@ -4,6 +4,7 @@ import torch
 import duckdb
 import base64
 import hashlib
+from transformers.utils import get_json_schema
 
 DEVELOPER_CONTENT = """
 You are a helpful assistant and harmless assistant.
@@ -115,6 +116,74 @@ TOOL_CONTENT = """
   }
 ]
 """.strip()
+
+
+def browser_search(query: str, topn: int = 10) -> str:
+    """
+    Searches for information related to a query and displays top N results.
+
+    Args:
+        query: The search query string.
+        topn: Number of results to display.
+
+    Returns:
+        A stringified summary of the search results.
+    """
+    raise NotImplementedError("This function is only used for JSON schema generation.")
+
+
+def browser_open(
+    id: int | str = -1,
+    cursor: int = -1,
+    loc: int = -1,
+    num_lines: int = -1,
+    view_source: bool = False,
+    source: str | None = None,
+) -> str:
+    """
+    Opens a link from the current page or a fully qualified URL.
+
+    Args:
+        id: Link id from current page (integer) or fully qualified URL (string).
+        cursor: Page cursor to operate on.
+        loc: Starting line number.
+        num_lines: Number of lines to display.
+        view_source: Whether to view page source.
+        source: The source identifier (e.g., "web").
+
+    Returns:
+        A string representation of the opened page content or metadata.
+    """
+    raise NotImplementedError("This function is only used for JSON schema generation.")
+
+
+def browser_find(pattern: str, cursor: int = -1) -> str:
+    """
+    Finds exact matches of a pattern in the current page or a specified page by cursor.
+
+    Args:
+        pattern: The exact text pattern to search for.
+        cursor: Page cursor to search in.
+
+    Returns:
+        A string representation of the find results.
+    """
+    raise NotImplementedError("This function is only used for JSON schema generation.")
+
+
+def get_browser_tools_json_schema() -> str:
+    """
+    Return JSON schema for the three browser tools using transformers.utils.get_json_schema.
+
+    The schema format matches OpenAI-style tools:
+    [{"type": "function", "function": {...}}, ...]
+    """
+    schemas = [
+        get_json_schema(browser_search),
+        get_json_schema(browser_open),
+        get_json_schema(browser_find),
+    ]
+    return json.dumps(schemas, ensure_ascii=False)
 
 class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):

@@ -1,87 +1,21 @@
 import json
 from pathlib import Path
+import sys
 
-# 定义本数据集中会用到的工具 schema
-tools = [
-    {
-        "type": "function",
-        "function": {
-            "name": "browser.search",
-            "description": "Search the web and return search results.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query string."
-                    }
-                },
-                "required": ["query"]
-            },
-            "return": {
-                "type": "string",
-                "description": "Search results as a stringified summary."
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser.open",
-            "description": "Open a URL or a result by index/cursor.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "URL or document identifier."
-                    },
-                    "cursor": {
-                        "type": "integer",
-                        "description": "Cursor/index of the result set."
-                    }
-                },
-                "required": []
-            },
-            "return": {
-                "type": "string",
-                "description": "Opened page content or metadata."
-            }
-        }
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "browser.find",
-            "description": "Find text pattern in the current page.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "cursor": {
-                        "type": "integer",
-                        "description": "Cursor/index of the opened page."
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Substring or regex pattern to search for."
-                    }
-                },
-                "required": ["pattern"]
-            },
-            "return": {
-                "type": "string",
-                "description": "Find results as text."
-            }
-        }
-    }
-]
+# Ensure repo root (one level above project root) is on sys.path
+this_dir = Path(__file__).resolve().parent
+repo_root = this_dir.parent.parent
+if str(repo_root) not in sys.path:
+    sys.path.insert(0, str(repo_root))
 
-TOOLS_JSON_SCHEMA_STR = json.dumps(tools, ensure_ascii=False)
+from data_utils import get_browser_tools_json_schema
 
-input_path = Path(
-    "/mnt/c/Users/lms/Desktop/Megatron-LM/examples/openresearcher/data/converted_gpt_oss_search_correct.example.jsonl"
-)
-output_path = input_path.with_suffix(".tools_sft.jsonl")
+# 使用统一的工具 JSON schema 生成函数
+TOOLS_JSON_SCHEMA_STR = get_browser_tools_json_schema()
+
+# 与 parse.py 流水线衔接：输入为 parse 输出的 materialized.jsonl，输出为同目录下的 tools_sft.jsonl
+input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.jsonl"
+output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
 
 
 def normalize_messages(raw_messages):
@@ -162,6 +96,7 @@ def normalize_messages(raw_messages):
 
 
 def convert():
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     n = 0
     with input_path.open("r", encoding="utf-8") as fin, output_path.open(
         "w", encoding="utf-8"
