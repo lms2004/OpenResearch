@@ -176,7 +176,7 @@ def convert_messages_to_target_format(
 
 
 def convert_parquet_to_jsonl(
-    parquet_path: Path,
+    parquet_paths: list[Path],
     output_jsonl_path: Path,
     output_pretty_json_path: Path | None,
     template_jsonl_path: Path | None,
@@ -184,16 +184,17 @@ def convert_parquet_to_jsonl(
     batch_size: int = 128,
     pretty_limit: int = 50,
 ) -> int:
-    """Convert parquet records to JSONL and optional pretty JSON array."""
+    """Convert parquet record(s) to one JSONL and optional pretty JSON array.
+    If multiple paths are given, all are read in order and merged into one output.
+    """
     template_tools: list[dict[str, Any]] = []
     if template_jsonl_path is not None:
         template_tools = load_template_tools(template_jsonl_path)
 
-    parquet = pq.ParquetFile(parquet_path)
+    output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     total_rows = 0
     pretty_rows = 0
 
-    output_jsonl_path.parent.mkdir(parents=True, exist_ok=True)
     with output_jsonl_path.open("w", encoding="utf-8") as out_jsonl:
         out_pretty = None
         if output_pretty_json_path is not None:
@@ -201,23 +202,25 @@ def convert_parquet_to_jsonl(
             out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
             out_pretty.write("[\n")
 
-        for batch in parquet.iter_batches(batch_size=batch_size):
-            for row in batch.to_pylist():
-                record = dict(row)
-                record["messages"] = convert_messages_to_target_format(
-                    record.get("messages", [])
-                )
-                record.setdefault("correct", default_correct)
-                record.setdefault("tools", template_tools)
-                out_jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
+        for parquet_path in parquet_paths:
+            parquet = pq.ParquetFile(parquet_path)
+            for batch in parquet.iter_batches(batch_size=batch_size):
+                for row in batch.to_pylist():
+                    record = dict(row)
+                    record["messages"] = convert_messages_to_target_format(
+                        record.get("messages", [])
+                    )
+                    record.setdefault("correct", default_correct)
+                    record.setdefault("tools", template_tools)
+                    out_jsonl.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-                if out_pretty is not None and pretty_rows < pretty_limit:
-                    if pretty_rows > 0:
-                        out_pretty.write(",\n")
-                    out_pretty.write(json.dumps(record, ensure_ascii=False, indent=2))
-                    pretty_rows += 1
+                    if out_pretty is not None and pretty_rows < pretty_limit:
+                        if pretty_rows > 0:
+                            out_pretty.write(",\n")
+                        out_pretty.write(json.dumps(record, ensure_ascii=False, indent=2))
+                        pretty_rows += 1
 
-                total_rows += 1
+                    total_rows += 1
 
         if out_pretty is not None:
             out_pretty.write("\n]\n")
@@ -234,12 +237,17 @@ def parse_args() -> argparse.Namespace:
     # Use paths relative to this file's directory (train/datasets)
     this_dir = Path(__file__).resolve().parent
     repo_root = this_dir.parent.parent
+    dataset_dir = repo_root / "OpenResearcher-Dataset"
+    default_parquet_dirs = [
+        dataset_dir / "seed_42",
+        dataset_dir / "seed_43",
+    ]
     parser.add_argument(
         "--parquet",
         type=Path,
-        default=repo_root
-        / "OpenResearcher-Dataset/seed_42/train-00000-of-00003.parquet",
-        help="Input parquet file path.",
+        nargs="+",
+        default=default_parquet_dirs,
+        help="One or more parquet files or directories. For dirs, all .parquet under each are merged (default: seed_42 + seed_43).",
     )
     parser.add_argument(
         "--template-jsonl",
@@ -276,8 +284,30 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    # args.parquet is a list of paths (one or more)
+    parquet_paths: list[Path] = []
+    for p in args.parquet:
+        p = p.resolve()
+        if p.is_dir():
+            found = sorted(p.rglob("*.parquet"))
+            if not found:
+                print(f"Warning: no .parquet under {p}, skipping.")
+            else:
+                parquet_paths.extend(found)
+                print(f"Found {len(found)} parquet file(s) under {p}")
+        elif p.is_file():
+            parquet_paths.append(p)
+        else:
+            raise FileNotFoundError(f"Not a file or directory: {p}")
+
+    if not parquet_paths:
+        raise FileNotFoundError(
+            "No .parquet files from any of the given paths. Check --parquet (e.g. OpenResearcher-Dataset/seed_42 seed_43)."
+        )
+    parquet_paths.sort()
+
     rows = convert_parquet_to_jsonl(
-        parquet_path=args.parquet,
+        parquet_paths=parquet_paths,
         output_jsonl_path=args.output_jsonl,
         output_pretty_json_path=args.output_pretty_json,
         template_jsonl_path=args.template_jsonl,
