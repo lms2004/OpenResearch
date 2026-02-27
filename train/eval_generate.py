@@ -236,11 +236,21 @@ def main():
                     tools=tools,
                     add_generation_prompt=True,
                     tokenize=False,
-                    truncation=True,
-                    max_length=args.max_input_length,
+                    truncation=False,
                 )
             except Exception:
                 # chat_template 失败时跳过该样本
+                continue
+
+            # 使用 tokenizer 计算长度；对极长样本直接跳过，不再做截断
+            enc = tokenizer(
+                prompt,
+                add_special_tokens=False,
+                return_attention_mask=False,
+            )
+            input_ids = enc["input_ids"]
+            # 对特别长的样本（>30000 tokens）直接跳过，避免极端长上下文拖慢 / 撞 vLLM 限制
+            if len(input_ids) > 30000:
                 continue
 
             batch_prompts.append(prompt)
