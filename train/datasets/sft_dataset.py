@@ -18,6 +18,18 @@ input_path = this_dir / "data/converted_gpt_oss_search_correct.materialized.json
 output_path = this_dir / "data/converted_gpt_oss_search_correct.tools_sft.jsonl"
 
 
+def _normalize_args_id(obj):
+    """Ensure arguments.id is always str so PyArrow/datasets see consistent type."""
+    if isinstance(obj, dict):
+        if "id" in obj and obj["id"] is not None:
+            obj = {k: _normalize_args_id(v) if k != "id" else str(v) for k, v in obj.items()}
+        else:
+            obj = {k: _normalize_args_id(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        obj = [_normalize_args_id(x) for x in obj]
+    return obj
+
+
 def normalize_messages(raw_messages):
     """
     把 pretty.json / 原始 messages 转成类似：
@@ -49,6 +61,9 @@ def normalize_messages(raw_messages):
                         parsed_args = args
                 else:
                     parsed_args = args
+                # 统一 arguments 内 id 为 str，避免 PyArrow 报 "changed from string to number"
+                if isinstance(parsed_args, dict):
+                    parsed_args = _normalize_args_id(parsed_args)
 
                 new_tc = {
                     "type": tc.get("type", "function"),
