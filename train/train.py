@@ -1,14 +1,28 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+"""
+训练流程（推荐顺序）：
+  1) 数据准备: 原始数据 → parse.py → materialize → sft_dataset.py → *.tools_sft.jsonl
+  2) 训练: train.py --model_name_or_path <base> --train_jsonl <train.tools_sft.jsonl> [--eval_jsonl ...]
+  3) 评估: eval_generate.py --model_dir <output_dir> --eval_jsonl ... --output_jsonl ... [--log_wandb]
+"""
+
 import os
 import json
 import argparse
 from pathlib import Path
 
+import torch
 from datasets import load_dataset
-from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM, TrainerCallback
 from trl import SFTTrainer, SFTConfig
+
+try:
+    import wandb
+    _HAS_WANDB = True
+except ImportError:
+    _HAS_WANDB = False
 
 # 与 parse.py / sft_dataset.py 流水线一致：默认数据为 tools_sft.jsonl，输出到 train/outputs
 _train_dir = Path(__file__).resolve().parent
@@ -48,6 +62,14 @@ def parse_args():
     # 工具调用数据一般不建议 packing（会把多个对话硬拼到一起，可能影响 tool 结构）
     p.add_argument("--packing", action="store_true", help="谨慎开启；tool calling 数据通常建议关闭")
 
+    # 训练时在每次 eval 后采样若干条验证集，生成模型响应并记入 wandb 表格，便于查看
+    p.add_argument("--log_eval_responses_wandb", action="store_true",
+                   help="每次评估后对验证集采样生成回复，并记录到 wandb 表格（需提供 --eval_jsonl）")
+    p.add_argument("--eval_response_samples", type=int, default=5,
+                   help="每次评估时采样多少条验证样本做生成并记入 wandb（默认 5）")
+    p.add_argument("--eval_response_max_new_tokens", type=int, default=256,
+                   help="训练时记录响应生成的最大 token 数（默认 256）")
+
     return p.parse_args()
 
 
@@ -62,6 +84,92 @@ def ensure_tools_is_json_str(example):
     if isinstance(tools, list):
         example["tools"] = json.dumps(tools, ensure_ascii=False)
     return example
+
+
+def _load_tools_for_template(sample):
+    tools = sample.get("tools")
+    if tools is None:
+        return None
+    if isinstance(tools, str):
+        try:
+            return json.loads(tools)
+        except Exception:
+            return None
+    return tools
+
+
+def _last_user_content(messages):
+    for m in reversed(messages):
+        if m.get("role") == "user" and m.get("content"):
+            return (m.get("content") or "")[:1500]
+    return ""
+
+
+def _last_assistant_content(messages):
+    for m in reversed(messages):
+        if m.get("role") == "assistant":
+            c = m.get("content") or ""
+            if c:
+                return c[:1500]
+            if m.get("tool_calls"):
+                return "[tool_calls]"
+    return ""
+
+
+class EvalResponseLoggingCallback(TrainerCallback):
+    """每次评估后对验证集采样做生成，并将结果记入 wandb 表格，便于查看模型响应。"""
+
+    def __init__(self, tokenizer, eval_dataset, num_samples=5, max_new_tokens=256, max_length=4096):
+        self.tokenizer = tokenizer
+        self.eval_dataset = eval_dataset
+        self.num_samples = min(num_samples, len(eval_dataset)) if eval_dataset else 0
+        self.max_new_tokens = max_new_tokens
+        self.max_length = max_length
+
+    def on_evaluate(self, args, state, model, **kwargs):
+        if not _HAS_WANDB or self.num_samples <= 0 or state.global_step <= 0:
+            return
+        model.eval()
+        device = next(model.parameters()).device
+        table_rows = []
+        with torch.no_grad():
+            for i in range(self.num_samples):
+                sample = self.eval_dataset[i]
+                messages = sample.get("messages")
+                if not messages:
+                    continue
+                tools = _load_tools_for_template(sample)
+                try:
+                    input_ids = self.tokenizer.apply_chat_template(
+                        messages,
+                        tools=tools,
+                        add_generation_prompt=True,
+                        return_tensors="pt",
+                        truncation=True,
+                        max_length=self.max_length,
+                    ).to(device)
+                except Exception:
+                    continue
+                out = model.generate(
+                    input_ids=input_ids,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    pad_token_id=self.tokenizer.pad_token_id,
+                    eos_token_id=self.tokenizer.eos_token_id,
+                )
+                gen_ids = out[0, input_ids.shape[1]:]
+                generated = self.tokenizer.decode(gen_ids, skip_special_tokens=False)
+                last_user = _last_user_content(messages)
+                gold = _last_assistant_content(messages)
+                resp_display = (generated[:2000] + "…") if len(generated) > 2000 else generated
+                table_rows.append([state.global_step, i, last_user, gold, resp_display])
+        if table_rows:
+            table = wandb.Table(
+                columns=["step", "sample_idx", "last_user", "gold_assistant", "model_response"],
+                data=table_rows,
+            )
+            wandb.log({"train_eval/responses": table}, step=state.global_step)
+        model.train()
 
 
 def main():
@@ -136,12 +244,29 @@ def main():
     )
 
     # 6) Trainer
+    callbacks = []
+    if args.log_eval_responses_wandb and args.eval_jsonl and ds.get("validation") is not None and _HAS_WANDB:
+        callbacks.append(
+            EvalResponseLoggingCallback(
+                tokenizer=tokenizer,
+                eval_dataset=ds["validation"],
+                num_samples=args.eval_response_samples,
+                max_new_tokens=args.eval_response_max_new_tokens,
+                max_length=args.max_seq_length,
+            )
+        )
+    elif args.log_eval_responses_wandb and (not args.eval_jsonl or ds.get("validation") is None):
+        print("⚠️ --log_eval_responses_wandb 已指定但未提供验证集（--eval_jsonl），已忽略。")
+    elif args.log_eval_responses_wandb and not _HAS_WANDB:
+        print("⚠️ --log_eval_responses_wandb 已指定但未安装 wandb，已忽略。可执行: pip install wandb")
+
     trainer = SFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=ds["train"],
         eval_dataset=ds.get("validation", None),
         processing_class=tokenizer,
+        callbacks=callbacks,
     )
 
     # 7) 开训
