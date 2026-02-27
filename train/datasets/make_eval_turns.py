@@ -6,8 +6,10 @@
 - 单位：轨迹 sample_id × assistant turn_index
 - 每条样本包含：到该轮为止的 messages 前缀 + gold_assistant
 - 仅随机抽取最多 MAX_EVAL_TRAJ 条轨迹的全部轮次，方便在 eval_generate.py 中做多轮可视化评估。
+- 可按 num_generated_tokens 筛选轨迹（--max-tokens）。
 """
 
+import argparse
 import json
 import random
 from pathlib import Path
@@ -20,8 +22,8 @@ INPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.materialized.jsonl"
 OUTPUT_PATH = DATA_DIR / "converted_gpt_oss_search_correct.tools_sft.eval_turns.jsonl"
 
 MAX_EVAL_TRAJ = 10          # 最多选多少条轨迹（None 表示不过滤）
-MAX_TOKENS_PER_TRAJ = 30000 # 可选：过滤特别长轨迹（基于 num_generated_tokens 字段）
-MAX_PREFIX_CHARS = 30000    # 前缀 messages 序列化后的最大字符数，超过则跳过该 turn
+DEFAULT_MAX_TOKENS = 30000  # 默认：过滤 num_generated_tokens 超过此值的轨迹（0 或负数表示不按 token 筛选）
+MAX_PREFIX_CHARS = 30000   # 前缀 messages 序列化后的最大字符数，超过则跳过该 turn
 
 
 def normalize_messages(raw_messages):
@@ -47,11 +49,11 @@ def normalize_messages(raw_messages):
     return normalized
 
 
-def main() -> None:
+def main(max_tokens: int | None, max_traj: int = MAX_EVAL_TRAJ) -> None:
     if not INPUT_PATH.is_file():
         raise FileNotFoundError(f"INPUT not found: {INPUT_PATH}")
 
-    # 1) 读取原始 materialized 样本，并按需要过滤过长轨迹
+    # 1) 读取原始 materialized 样本，并按 num_generated_tokens 过滤过长轨迹
     raw_samples = []
     with INPUT_PATH.open("r", encoding="utf-8") as f:
         for line in f:
@@ -60,7 +62,7 @@ def main() -> None:
                 continue
             sample = json.loads(line)
             nt = sample.get("num_generated_tokens")
-            if isinstance(nt, int) and MAX_TOKENS_PER_TRAJ and nt > MAX_TOKENS_PER_TRAJ:
+            if max_tokens is not None and isinstance(nt, int) and nt > max_tokens:
                 continue
             raw_samples.append(sample)
 
@@ -70,11 +72,12 @@ def main() -> None:
         return
 
     # 2) 轨迹级随机采样
-    if MAX_EVAL_TRAJ is None or MAX_EVAL_TRAJ >= num_traj:
+    max_traj = max_traj or num_traj
+    if max_traj >= num_traj:
         keep_indices = list(range(num_traj))
     else:
         random.seed(42)  # 如需完全随机可移除
-        keep_indices = random.sample(range(num_traj), k=MAX_EVAL_TRAJ)
+        keep_indices = random.sample(range(num_traj), k=max_traj)
     keep_indices_set = set(keep_indices)
 
     # 3) 展开为 (sample_id, turn_index) 级别的多轮评估样本
@@ -139,5 +142,26 @@ def main() -> None:
     print(f"Wrote {n_turns} assistant turns -> {OUTPUT_PATH}")
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Build eval turns from materialized.jsonl; filter trajectories by num_generated_tokens."
+    )
+    parser.add_argument(
+        "--max-tokens",
+        type=int,
+        default=DEFAULT_MAX_TOKENS,
+        help=f"Drop trajectories with num_generated_tokens > this (default: {DEFAULT_MAX_TOKENS}). Set to 0 or negative to disable.",
+    )
+    parser.add_argument(
+        "--max-traj",
+        type=int,
+        default=MAX_EVAL_TRAJ,
+        help=f"Max number of trajectories to sample for eval (default: {MAX_EVAL_TRAJ}).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    max_tokens = args.max_tokens if args.max_tokens > 0 else None
+    main(max_tokens=max_tokens, max_traj=args.max_traj)
