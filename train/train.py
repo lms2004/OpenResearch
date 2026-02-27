@@ -102,7 +102,7 @@ def main():
     # 5) SFT 配置
     sft_config = SFTConfig(
         output_dir=args.output_dir,
-        max_seq_length=args.max_seq_length,
+        max_length=args.max_seq_length,
         packing=args.packing,
 
         per_device_train_batch_size=args.per_device_train_batch_size,
@@ -116,7 +116,7 @@ def main():
 
         logging_steps=args.logging_steps,
         save_steps=args.save_steps,
-        evaluation_strategy="steps" if args.eval_jsonl else "no",
+        eval_strategy="steps" if args.eval_jsonl else "no",
         eval_steps=args.eval_steps if args.eval_jsonl else None,
 
         bf16=args.bf16,
