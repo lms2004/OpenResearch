@@ -124,7 +124,7 @@ def main():
 
         bf16=args.bf16,
         fp16=args.fp16,
-        assistant_only_loss=True,
+        assistant_only_loss=False,
         report_to="wandb",
         run_name=args.run_name or Path(args.output_dir).name,
         project=args.wandb_project,
