@@ -146,7 +146,8 @@ def _last_assistant_content(messages):
 class EvalResponseLoggingCallback(TrainerCallback):
     """每次评估后对验证集采样做生成，并将结果记入 wandb 表格，便于查看模型响应。"""
 
-    def __init__(self, tokenizer, eval_dataset, num_samples=5, max_new_tokens=256, max_length=4096):
+    def __init__(self, model, tokenizer, eval_dataset, num_samples=5, max_new_tokens=256, max_length=4096):
+        self.model = model
         self.tokenizer = tokenizer
         self.eval_dataset = eval_dataset
         self.num_samples = min(num_samples, len(eval_dataset)) if eval_dataset else 0
@@ -156,7 +157,7 @@ class EvalResponseLoggingCallback(TrainerCallback):
     def on_evaluate(self, args, state, control, metrics=None, **kwargs):
         if not _HAS_WANDB or self.num_samples <= 0 or state.global_step <= 0:
             return
-        model = self.trainer.model
+        model = self.model
         model.eval()
         device = next(model.parameters()).device
         table_rows = []
@@ -298,6 +299,7 @@ def main():
     if args.log_eval_responses_wandb and has_validation and _HAS_WANDB:
         callbacks.append(
             EvalResponseLoggingCallback(
+                model=model,
                 tokenizer=tokenizer,
                 eval_dataset=ds_val,
                 num_samples=args.eval_response_samples,
