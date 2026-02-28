@@ -49,12 +49,12 @@ curl http://localhost:8001/v1/models
 python data_synthesis/02_extract_problems.py \
   --dataset_dir /mnt/c/Users/lms/Desktop/OpenResearcher/OpenResearcher-Dataset \
   --output data_synthesis/artifacts/problems.jsonl \
-  --all-seeds
+  --max_samples 1000
 ```
 
 - `--dataset_dir`：OpenResearcher-Dataset 根目录（其下应有 `seed_42/`, `seed_43/` 等，内含 `*.parquet`）。
 - `--output`：输出的 JSONL 路径，每行 `{"qid": int, "question": str, "answer": str}`。
-- `--all-seeds`：使用所有 `seed_*`；也可用 `--seeds 42 43` 指定部分 seed。
+- `--all_seeds`：使用所有 `seed_*`；也可用 `--seeds 42 43` 指定部分 seed。
 
 ### 2.2 使用 HuggingFace 上的数据集
 
@@ -89,8 +89,17 @@ bash scripts/start_search_service.sh dense 8000
 
 ### 3.2 运行 Agent（Deep Search）
 
+**使用 GPT-OSS 时**，必须通过环境变量 `MODEL_NAME` 指定与 vLLM 一致的模型路径（否则会走默认 OpenResearcher-30B 并拉取 HF tokenizer）：
+
 ```bash
-# 在项目根目录执行
+# 在项目根目录执行（把路径改成你本机的 GPT-OSS 目录）
+MODEL_NAME=/workspace/OpenResearch/openai/gpt-oss-20b \
+  bash data_synthesis/03_run_deepsearch.sh
+```
+
+若使用默认 OpenResearcher 模型，可直接：
+
+```bash
 bash data_synthesis/03_run_deepsearch.sh
 ```
 
@@ -100,7 +109,7 @@ bash data_synthesis/03_run_deepsearch.sh
 - 调用本机 vLLM 服务（默认 `http://localhost:8001/v1`）作为 GPT-OSS 推理后端；
 - 将轨迹写入 `data_synthesis/artifacts/trajectories/`（其下为 `node_*_shard_*.jsonl` 等）。
 
-如需自定义端口、检索方式或输出目录，可编辑 `data_synthesis/03_run_deepsearch.sh` 中的变量。
+如需自定义端口、检索方式或输出目录，可设置环境变量或编辑 `data_synthesis/03_run_deepsearch.sh` 中的变量（如 `VLLM_SERVER_URL`、`SEARCH_URL`、`MODEL_NAME`）。
 
 ---
 
