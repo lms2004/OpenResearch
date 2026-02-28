@@ -174,7 +174,7 @@ async def run_one(
     qid: Any,
     generator: Any,
     browser_pool: BrowserPool,
-    max_rounds: int = 200,
+    max_rounds: int = 50,
 ) -> List[dict]:
     """
     Helper function for native tool calling using tokenizer's chat template
@@ -549,7 +549,7 @@ def worker_entry(
                                 qid=qid,
                                 generator=generator,
                                 browser_pool=browser_pool,
-                                max_rounds=200
+                                max_rounds=100
                             )
                             dt = time.time() - t0
                             finished_at = datetime.datetime.utcnow().isoformat() + "Z"
