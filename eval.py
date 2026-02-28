@@ -241,6 +241,80 @@ def collect_tool_usage_data(correct_items, incorrect_items, qid_to_data):
     return correct_tool_usage, incorrect_tool_usage
 
 
+def _percentile(sorted_arr, p):
+    """Return p-th percentile (0-100). sorted_arr must be sorted."""
+    if not sorted_arr:
+        return None
+    k = (len(sorted_arr) - 1) * p / 100
+    f = int(k)
+    c = f + 1 if f + 1 < len(sorted_arr) else f
+    return sorted_arr[f] + (k - f) * (sorted_arr[c] - sorted_arr[f]) if c > f else sorted_arr[f]
+
+
+def print_latency_statistics(data):
+    """
+    Print latency and related timing/volume statistics from trajectory records.
+    Uses latency_s, num_rounds, num_tool_calls when present.
+    """
+    latencies = [d["latency_s"] for d in data if isinstance(d.get("latency_s"), (int, float))]
+    if not latencies:
+        print("\nNo latency_s data found in records (e.g. older runs). Skipping time distribution.")
+        return
+
+    latencies_sorted = sorted(latencies)
+    n = len(latencies_sorted)
+    mean_lat = sum(latencies) / n
+    variance = sum((x - mean_lat) ** 2 for x in latencies) / n if n > 0 else 0
+    std_lat = math.sqrt(variance)
+
+    table = PrettyTable()
+    table.title = "Time Distribution (per-sample latency_s)"
+    table.field_names = ["Metric", "Value"]
+    table.align["Metric"] = "l"
+    table.align["Value"] = "r"
+    table.add_row(["Samples with latency", n])
+    table.add_row(["Min (s)", f"{min(latencies):.3f}"])
+    table.add_row(["Max (s)", f"{max(latencies):.3f}"])
+    table.add_row(["Mean (s)", f"{mean_lat:.3f}"])
+    table.add_row(["Median / P50 (s)", f"{_percentile(latencies_sorted, 50):.3f}"])
+    table.add_row(["Std (s)", f"{std_lat:.3f}"])
+    table.add_row(["P90 (s)", f"{_percentile(latencies_sorted, 90):.3f}"])
+    table.add_row(["P95 (s)", f"{_percentile(latencies_sorted, 95):.3f}"])
+    table.add_row(["P99 (s)", f"{_percentile(latencies_sorted, 99):.3f}"])
+
+    print("\n" + str(table))
+
+    num_rounds_list = [d["num_rounds"] for d in data if isinstance(d.get("num_rounds"), (int, float))]
+    num_tool_calls_list = [d["num_tool_calls"] for d in data if isinstance(d.get("num_tool_calls"), (int, float))]
+    if num_rounds_list or num_tool_calls_list:
+        table2 = PrettyTable()
+        table2.title = "Rounds & Tool Calls (per sample)"
+        table2.field_names = ["Metric", "Min", "Max", "Mean", "Median"]
+        table2.align["Metric"] = "l"
+        for c in ["Min", "Max", "Mean", "Median"]:
+            table2.align[c] = "r"
+        if num_rounds_list:
+            sr = sorted(num_rounds_list)
+            table2.add_row([
+                "num_rounds",
+                min(num_rounds_list),
+                max(num_rounds_list),
+                f"{sum(num_rounds_list)/len(num_rounds_list):.2f}",
+                f"{_percentile(sr, 50):.1f}",
+            ])
+        if num_tool_calls_list:
+            st = sorted(num_tool_calls_list)
+            table2.add_row([
+                "num_tool_calls",
+                min(num_tool_calls_list),
+                max(num_tool_calls_list),
+                f"{sum(num_tool_calls_list)/len(num_tool_calls_list):.2f}",
+                f"{_percentile(st, 50):.1f}",
+            ])
+        print("\n" + str(table2))
+    print("="*60)
+
+
 def print_turn_statistics(correct_turns, incorrect_turns):
     """Print turn distribution statistics"""
     print("\n" + "="*60)
@@ -653,13 +727,20 @@ if __name__ == '__main__':
         print(f"Using base URL: {args.base_url}")
     output = judger.judge(clean_data)
 
-    # Create saved_output with only content key (remove extracted_final_answer, reasoning, correct, confidence, parse_error)
+    # Create saved_output: judge result + timing fields from trajectory (latency_s, num_rounds, num_tool_calls, etc.)
     keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
+    timing_keys = ["latency_s", "num_rounds", "num_tool_calls", "started_at", "finished_at"]
+    qid_to_clean = {d["qid"]: d for d in clean_data}
     saved_output = []
     for item in output:
         saved_item = {k: v for k, v in item.items() if k not in keys_to_remove}
+        qid = item.get("qid")
+        if qid is not None and qid in qid_to_clean:
+            for k in timing_keys:
+                if k in qid_to_clean[qid]:
+                    saved_item[k] = qid_to_clean[qid][k]
         saved_output.append(saved_item)
-    saved_output.sort(key=lambda x: x['qid'])
+    saved_output.sort(key=lambda x: x["qid"])
 
     # Save to output file
     output_file = args.input_dir.rstrip('/') + '/evaluated.jsonl'
@@ -708,6 +789,9 @@ if __name__ == '__main__':
     table.add_row(["Overall Accuracy (Correct/Total)", "", f"{overall_accuracy:.2%}"])
 
     print(table)
+
+    # Time distribution (latency_s, num_rounds, num_tool_calls)
+    print_latency_statistics(clean_data)
 
     # Analyze turn distribution
     qid_to_data = {d['qid']: d for d in clean_data}

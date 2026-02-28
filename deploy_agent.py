@@ -538,6 +538,7 @@ def worker_entry(
                     MAX_RETRY = 5
                     attempt = 0
                     error_msg = None
+                    started_at = datetime.datetime.utcnow().isoformat() + "Z"
                     t0 = time.time()
                     while attempt < MAX_RETRY:
                         attempt += 1
@@ -551,14 +552,38 @@ def worker_entry(
                                 max_rounds=200
                             )
                             dt = time.time() - t0
+                            finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+                            num_rounds = sum(1 for m in messages if m.get("role") == "assistant")
+                            num_tool_calls = sum(1 for m in messages if m.get("role") == "tool")
                             rec = item_data.copy()
-                            rec.update({"messages": messages, "latency_s": dt, "error": None, "attempts": attempt, "status":"success"})
+                            rec.update({
+                                "messages": messages,
+                                "latency_s": round(dt, 3),
+                                "started_at": started_at,
+                                "finished_at": finished_at,
+                                "num_rounds": num_rounds,
+                                "num_tool_calls": num_tool_calls,
+                                "error": None,
+                                "attempts": attempt,
+                                "status": "success",
+                            })
                             return rec
                         except Exception as e:
                             error_msg = traceback.format_exc()
                             print(f"[Worker {worker_idx}] qid {qid} attempt {attempt}/{MAX_RETRY} failed: {e}")
+                    finished_at = datetime.datetime.utcnow().isoformat() + "Z"
                     rec = item_data.copy()
-                    rec.update({"messages": [], "latency_s": 0.0, "error": error_msg, "attempts": attempt, "status":"fail"})
+                    rec.update({
+                        "messages": [],
+                        "latency_s": 0.0,
+                        "started_at": started_at,
+                        "finished_at": finished_at,
+                        "num_rounds": 0,
+                        "num_tool_calls": 0,
+                        "error": error_msg,
+                        "attempts": attempt,
+                        "status": "fail",
+                    })
                     return rec
 
             tasks = [asyncio.create_task(process_item(task)) for task in tasks_to_process]
