@@ -356,7 +356,7 @@ async def run_one(
                 "role": "assistant",
                 "content": non_thinking_content if tool_call_text is None else "",
                 "reasoning_content": reasoning_content,
-                "tool_calls": parsed_tool_calls
+                "tool_calls": parsed_tool_calls if parsed_tool_calls else [],
             })
 
             # Check if there are tool calls
