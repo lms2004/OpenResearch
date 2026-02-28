@@ -327,6 +327,25 @@ async def run_one(
                         print(f"[NATIVE_TOOLS] Failed to parse tool call in both JSON and XML formats")
                         print(f"[NATIVE_TOOLS] Tool call text: {tool_call_text}")
 
+            # Fallback: GPT-OSS-style "functions.browser.xxx json{...}" in content
+            if not parsed_tool_calls:
+                try:
+                    from scripts.test_vllm_tool_call import _parse_tool_call_alternative
+                    alt = _parse_tool_call_alternative(content)
+                    if alt:
+                        parsed_tool_calls = [{
+                            "id": f"{round_num}",
+                            "type": "function",
+                            "function": {
+                                "name": alt["name"],
+                                "arguments": alt.get("arguments", {}),
+                            },
+                        }]
+                        tool_call_text = "alternative"  # so assistant message content is cleared
+                        print(f"[NATIVE_TOOLS] Parsed tool call (GPT-OSS style): {alt}")
+                except Exception as e:
+                    print(f"[NATIVE_TOOLS] Alternative tool-call parser failed: {e}")
+
             print(f"[NATIVE_TOOLS] Assistant response (cleaned):\n{content}")
             if reasoning_content:
                 print(f"[NATIVE_TOOLS] Reasoning content:\n{reasoning_content}")

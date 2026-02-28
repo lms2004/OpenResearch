@@ -100,14 +100,82 @@ def _build_prompt(model_name: str, question: str, tokenizer_path: str | None = N
     return prompt
 
 
-def _parse_tool_call_from_content(content: str) -> dict | None:
-    """Extract first <tool_call>...</tool_call> and parse JSON inside. Same logic as deploy_agent."""
+def _extract_json_object_after(s: str, start_pos: int) -> dict | None:
+    """Find the first { after start_pos and parse a complete JSON object (balanced braces)."""
+    i = s.find("{", start_pos)
+    if i < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    quote = None
+    for j in range(i, len(s)):
+        c = s[j]
+        if escape:
+            escape = False
+            continue
+        if c == "\\" and in_string:
+            escape = True
+            continue
+        if not in_string:
+            if c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(s[i : j + 1])
+                    except json.JSONDecodeError:
+                        return None
+            elif c in ('"', "'"):
+                in_string = True
+                quote = c
+        else:
+            if c == quote:
+                in_string = False
+    return None
+
+
+def _parse_tool_call_alternative(content: str) -> dict | None:
+    """
+    Parse GPT-OSS-style tool call: e.g. "functions.browser.search json{...}" or
+    "browser.search ... json{\"query\":\"...\"}".
+    Returns {"name": "browser.search", "arguments": {...}} or None.
+    """
+    tool_names = ["browser.search", "browser.open", "browser.find"]
+    for name in tool_names:
+        # Match "browser.search" or "functions.browser.search"
+        for pattern in [name, "functions." + name]:
+            pos = content.find(pattern)
+            if pos < 0:
+                continue
+            start = pos + len(pattern)
+            # Optional "json" before the object
+            rest = content[start:]
+            json_start = rest.find("{")
+            if json_start < 0:
+                continue
+            obj = _extract_json_object_after(content, start + json_start)
+            if obj is not None and isinstance(obj, dict):
+                return {"name": name, "arguments": obj}
+    return None
+
+
+def _parse_tool_call_from_content(content: str) -> tuple[dict | None, str]:
+    """
+    Extract first tool call from content. Returns (parsed_dict, "canonical"|"alternative"|None).
+    Canonical: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+    Alternative: e.g. functions.browser.search json{...}
+    """
+    # 1) Canonical <tool_call>...</tool_call>
     if "<tool_call>" in content and "</tool_call>" in content:
         m = re.search(r"<tool_call>(.*?)</tool_call>", content, re.DOTALL)
         if m:
             text = m.group(1).strip()
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed, "canonical"
             except json.JSONDecodeError:
                 pass
     if "</tool_call>" in content:
@@ -115,10 +183,18 @@ def _parse_tool_call_from_content(content: str) -> dict | None:
         if m:
             text = m.group(1).strip()
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
+                if isinstance(parsed, dict):
+                    return parsed, "canonical"
             except json.JSONDecodeError:
                 pass
-    return None
+
+    # 2) Alternative format (e.g. GPT-OSS: "functions.browser.search json{...}")
+    alt = _parse_tool_call_alternative(content)
+    if alt is not None:
+        return alt, "alternative"
+
+    return None, ""
 
 
 async def test_tool_call(
@@ -181,11 +257,12 @@ async def test_tool_call(
     print(text[:1500] + ("..." if len(text) > 1500 else ""))
     print("--- End ---\n")
 
-    parsed = _parse_tool_call_from_content(text)
+    parsed, fmt = _parse_tool_call_from_content(text)
     if parsed is None:
-        print("Result: FAIL – no valid <tool_call>...</tool_call> with JSON found in output.")
-        print("The agent expects the model to output e.g.:")
-        print('  <tool_call>\n  {"name": "browser.search", "arguments": {"query": "..."}}\n  </tool_call>')
+        print("Result: FAIL – no valid tool call found in output.")
+        print("Supported formats:")
+        print('  1) <tool_call>\n  {"name": "browser.search", "arguments": {"query": "..."}}\n  </tool_call>')
+        print('  2) functions.browser.search json{"query":"..."}  (GPT-OSS style)')
         return False
 
     name = parsed.get("name", "")
@@ -201,6 +278,8 @@ async def test_tool_call(
         print(f"Result: WARN – parsed tool name '{name}' is not one of {expected_tools} (may still work).")
     else:
         print("Result: OK – tool-call format is compatible.")
+    if fmt == "alternative":
+        print("(Recognized GPT-OSS-style output: functions.browser.xxx json{...})")
 
     print(f"Parsed tool_call: name={name!r}, arguments={args}")
     return True
