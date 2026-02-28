@@ -286,6 +286,40 @@ def load_bcplus_data(data_path, include_pid=False):
     return data
 
 
+def load_synthesis_problems(data_path: str):
+    """Load data synthesis problem set from JSONL (qid, question, answer per line).
+
+    Used by deploy_agent when dataset_name='synthesis' and data_path points to
+    the output of data_synthesis/02_extract_problems.py.
+
+    Args:
+        data_path: Path to a single .jsonl file or glob (e.g. "artifacts/problems.jsonl").
+
+    Returns:
+        List[dict]: [{"qid": int, "question": str, "answer": str}, ...]
+    """
+    import glob
+    import os
+    paths = sorted(glob.glob(os.path.expanduser(data_path)))
+    if not paths:
+        raise FileNotFoundError(f"No files match: {data_path}")
+    data = []
+    for p in paths:
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                obj = json.loads(line)
+                data.append({
+                    "qid": obj["qid"],
+                    "question": obj["question"],
+                    "answer": obj["answer"],
+                })
+    print(f"✓ Loaded {len(data)} synthesis problems from {data_path}")
+    return data
+
+
 # All dataset loading functions removed - use load_dataset_unified() instead
 # See load_dataset_unified() for the unified HuggingFace-based loading interface
 
@@ -493,6 +527,15 @@ def load_dataset(dataset_name, data_path=None, repo_id="OpenResearcher/web-bench
     """
     dataset_key = dataset_name.lower().replace('_', '-')
 
+    # Data synthesis: problem set from JSONL (output of 02_extract_problems.py)
+    if dataset_key == 'synthesis':
+        if not data_path:
+            raise ValueError(
+                "Synthesis dataset requires data_path to a .jsonl file.\n"
+                "Example: load_dataset('synthesis', data_path='data_synthesis/artifacts/problems.jsonl')"
+            )
+        return load_synthesis_problems(data_path)
+
     # Special case: BrowseComp+ requires local parquet files
     if dataset_key == 'browsecomp-plus':
         if not data_path:
@@ -515,6 +558,7 @@ def list_available_datasets():
     return [
         'browsecomp',  # From unified HF repo
         'browsecomp-plus',  # Local parquet only
+        'synthesis',  # Data synthesis: JSONL from 02_extract_problems.py
         'hle', 'gaia', 'gaia_text',  # From unified HF repo
         'webwalkerqa', 'webwalkerqa_ref',  # From unified HF repo
         'xbench', 'xbench-deepsearch',  # From unified HF repo
