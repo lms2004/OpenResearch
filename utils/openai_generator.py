@@ -3,6 +3,7 @@ OpenAI API-compatible generator for agent inference
 Works with vLLM OpenAI-compatible server or any OpenAI-compatible API
 """
 from typing import List, Optional, AsyncIterator
+import os
 import httpx
 import json
 
@@ -77,11 +78,13 @@ class OpenAIAsyncGenerator:
         if not tokenizer_name:
              raise ValueError("No model name provided and could not fetch from server")
 
-        # Handle common model name prefixes
-        if tokenizer_name.startswith("openai/"):
-            tokenizer_name = tokenizer_name.replace("openai/", "OpenGPT-X/")
-
-        print(f"Loading tokenizer for: {tokenizer_name}")
+        # Prefer local directory; otherwise use model name as-is (HF id e.g. openai/gpt-oss-20b)
+        load_path = os.path.expanduser(tokenizer_name) if tokenizer_name.startswith(("/", "~")) else os.path.abspath(tokenizer_name)
+        if os.path.isdir(load_path):
+            tokenizer_name = load_path
+            print(f"Loading tokenizer from local path: {tokenizer_name}")
+        else:
+            print(f"Loading tokenizer for: {tokenizer_name}")
         # Direct load, no try/except fallback to Dummy
         self.tokenizer = AutoTokenizer.from_pretrained(
             tokenizer_name,
