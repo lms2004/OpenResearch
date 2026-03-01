@@ -118,7 +118,7 @@ def parse_args():
         "--vllm_model_name",
         type=str,
         default=None,
-        help="请求 vLLM /v1/completions 时使用的 model 字段，默认由服务端决定时可省略或填 default。",
+        help="请求 vLLM /v1/chat/completions 时使用的 model 字段；默认与 --model_dir 一致（与部署时使用的模型路径保持一致）。",
     )
     p.add_argument(
         "--log_wandb",
@@ -174,26 +174,37 @@ def main():
         raise FileNotFoundError(f"model_dir 不存在: {model_dir}（用于加载 tokenizer）")
 
     base_url = args.vllm_server_url.rstrip("/")
-    completions_url = f"{base_url}/v1/completions"
-    model_name = args.vllm_model_name or "default"
+    chat_completions_url = f"{base_url}/v1/chat/completions"
+    model_name = args.vllm_model_name or str(model_dir.resolve())
 
-    # 加载 tokenizer（含 chat_template，用于构造 prompt）
+    # 加载 tokenizer（用于长度过滤与 wandb 展示）
     tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    def call_vllm_completions(prompt: str) -> str:
-        """向 vLLM 服务请求单条 completion，返回生成的文本。"""
+    def _messages_for_api(messages):
+        """发送给 chat/completions 的 messages：不包含要生成的那条 assistant，由服务端生成。"""
+        if not messages:
+            return messages
+        last = messages[-1]
+        if last.get("role") == "assistant":
+            return messages[:-1]
+        return messages
+
+    def call_vllm_chat_completions(request_messages: list, tools=None) -> str:
+        """向 vLLM /v1/chat/completions 请求，返回 assistant 文本（content，若有 reasoning_content 则拼在前面）。"""
         payload = {
-            "prompt": prompt,
+            "model": model_name,
+            "messages": request_messages,
             "max_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "top_p": args.top_p,
-            "model": model_name,
         }
+        if tools is not None:
+            payload["tools"] = tools
         try:
             r = requests.post(
-                completions_url,
+                chat_completions_url,
                 json=payload,
                 headers={"Content-Type": "application/json"},
                 timeout=120,
@@ -203,7 +214,12 @@ def main():
             choices = data.get("choices", [])
             if not choices:
                 return ""
-            return choices[0].get("text", "")
+            msg = choices[0].get("message", {})
+            content = msg.get("content") or ""
+            reasoning = msg.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                return reasoning.strip() + "\n\n" + content
+            return content
         except Exception as e:
             return f"[ERROR: {e!r}]"
 
@@ -212,24 +228,21 @@ def main():
     total = 0
     total_response_chars = 0
 
-    # 缓冲区：做批量并发生成
-    batch_prompts = []
-    # 每个元素: dict with
-    #   sample_index: 当前样本在 eval_jsonl 中的顺序索引（从 0 开始）
-    #   sample: 原始 sample
-    #   messages: 完整 messages
-    #   turn_index: 当前评估的 assistant 轮次或样本自带的 turn_index（若没有则为 None）
-    #   gold_display: 该轮 / 该样本的 gold assistant 文本
+    # 缓冲区：每批发送 (request_messages, tools) 到 /v1/chat/completions
+    batch_requests = []  # list of (request_messages, tools)
+    # 每个元素: sample_index, sample, messages, turn_index, gold_display, prompt_display(用于 wandb)
     batch_meta = []
 
     def flush_batch():
         nonlocal total, total_response_chars, table_rows
-        if not batch_prompts:
+        if not batch_requests:
             return
-        # 并发请求 vLLM 服务
-        generated_texts = [""] * len(batch_prompts)
-        with ThreadPoolExecutor(max_workers=min(len(batch_prompts), args.vllm_batch_size)) as ex:
-            fut_to_i = {ex.submit(call_vllm_completions, p): i for i, p in enumerate(batch_prompts)}
+        generated_texts = [""] * len(batch_requests)
+        with ThreadPoolExecutor(max_workers=min(len(batch_requests), args.vllm_batch_size)) as ex:
+            fut_to_i = {
+                ex.submit(call_vllm_chat_completions, req[0], req[1]): i
+                for i, req in enumerate(batch_requests)
+            }
             for fut in as_completed(fut_to_i):
                 i = fut_to_i[fut]
                 try:
@@ -241,7 +254,7 @@ def main():
             sample_index = meta["sample_index"]
             sample = meta["sample"]
             messages = meta["messages"]
-            prompt = batch_prompts[i]
+            prompt_display = meta.get("prompt_display", "")
             # 优先使用样本自带的 turn_index（如 eval_turns.jsonl），否则退回批次元信息中的 turn_index
             meta_turn_index = meta.get("turn_index")
             sample_turn_index = sample.get("turn_index")
@@ -265,13 +278,12 @@ def main():
             total_response_chars += len(generated_text)
 
             if args.log_wandb and _HAS_WANDB:
-                # 记录 sample_id / turn_index + 核心三列：完整 prompt（经过 chat_template）、gold 回复、模型回复
-                prompt_display = prompt  # 不再截断，便于在 wandb 中查看完整上下文
+                prompt_display = prompt_display or "(chat/completions)"
                 resp_display = (generated_text[:3000] + "…") if len(generated_text) > 3000 else generated_text
                 turn_id = -1 if turn_index is None else turn_index
                 table_rows.append([sample_id, turn_id, prompt_display, gold_display, resp_display])
 
-        batch_prompts.clear()
+        batch_requests.clear()
         batch_meta.clear()
 
     with eval_path.open("r", encoding="utf-8") as fin, out_path.open(
@@ -307,6 +319,7 @@ def main():
                     if m.get("role") != "assistant":
                         continue
                     prefix = messages[:i]
+                    request_messages = _messages_for_api(prefix)
                     try:
                         prompt = tokenizer.apply_chat_template(
                             prefix,
@@ -321,7 +334,7 @@ def main():
                     if len(enc["input_ids"]) > 30000:
                         continue
                     gold_display = _assistant_turn_content(m)
-                    batch_prompts.append(prompt)
+                    batch_requests.append((request_messages, tools))
                     batch_meta.append(
                         {
                             "sample_index": sample_index,
@@ -329,12 +342,14 @@ def main():
                             "messages": messages,
                             "turn_index": i,
                             "gold_display": gold_display,
+                            "prompt_display": prompt,
                         }
                     )
-                    if len(batch_prompts) >= args.vllm_batch_size:
+                    if len(batch_requests) >= args.vllm_batch_size:
                         flush_batch()
             else:
                 # 整段对话只生成最后一轮
+                request_messages = _messages_for_api(messages)
                 try:
                     prompt = tokenizer.apply_chat_template(
                         messages,
@@ -354,7 +369,7 @@ def main():
                     gold_display = sample.get("gold_assistant", "")
                 else:
                     gold_display = _last_assistant_content(messages)
-                batch_prompts.append(prompt)
+                batch_requests.append((request_messages, tools))
                 # 若 eval_jsonl（例如 make_eval_turns.py 输出）自带 turn_index，则在 meta 中保留该字段，
                 # 便于后续输出与原始轨迹对齐。
                 existing_turn_index = sample.get("turn_index")
@@ -365,9 +380,10 @@ def main():
                         "messages": messages,
                         "turn_index": existing_turn_index,
                         "gold_display": gold_display,
+                        "prompt_display": prompt,
                     }
                 )
-                if len(batch_prompts) >= args.vllm_batch_size:
+                if len(batch_requests) >= args.vllm_batch_size:
                     flush_batch()
 
         # 处理最后不足一批的样本
