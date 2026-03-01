@@ -4,9 +4,10 @@
 import argparse
 import json
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-import torch
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import requests
+from transformers import AutoTokenizer
 from tqdm import tqdm
 
 try:
@@ -57,7 +58,13 @@ def parse_args():
         "--model_dir",
         type=str,
         required=True,
-        help="训练好的模型目录（train.py 的 output_dir）",
+        help="训练好的模型目录（用于加载 tokenizer 与 chat_template，不在此脚本内加载推理模型）",
+    )
+    p.add_argument(
+        "--vllm_server_url",
+        type=str,
+        required=True,
+        help="已部署的 vLLM 服务 base URL，例如 http://localhost:8001",
     )
     p.add_argument(
         "--eval_jsonl",
@@ -105,20 +112,13 @@ def parse_args():
         "--vllm_batch_size",
         type=int,
         default=32,
-        help="vLLM 并发生成时的批大小（提示条数），默认 32。4 卡时可适当增大（如 64～128）以吃满显存。",
+        help="每批并发请求数（同时向 vLLM 服务发送的请求数），默认 32。",
     )
     p.add_argument(
-        "--tensor_parallel_size",
-        type=int,
-        default=1,
-        metavar="N",
-        help="vLLM 张量并行 GPU 数，多卡推理时设为卡数（如 4）以充分利用多卡。",
-    )
-    p.add_argument(
-        "--gpu_memory_utilization",
-        type=float,
-        default=0.90,
-        help="vLLM 单卡显存占用比例（0~1），默认 0.9。",
+        "--vllm_model_name",
+        type=str,
+        default=None,
+        help="请求 vLLM /v1/completions 时使用的 model 字段，默认由服务端决定时可省略或填 default。",
     )
     p.add_argument(
         "--log_wandb",
@@ -171,36 +171,41 @@ def main():
     if not eval_path.is_file():
         raise FileNotFoundError(f"eval_jsonl 不存在: {eval_path}")
     if not model_dir.is_dir():
-        raise FileNotFoundError(f"model_dir 不存在: {model_dir}")
+        raise FileNotFoundError(f"model_dir 不存在: {model_dir}（用于加载 tokenizer）")
 
-    # ---------------- vLLM: 作为推理后端进行加速 ----------------
-    try:
-        from vllm import LLM, SamplingParams
-    except ImportError as e:
-        raise ImportError(
-            "当前评估脚本已改为使用 vLLM 进行推理，请先安装 vllm：\n\n"
-            "  pip install vllm\n"
-        ) from e
+    base_url = args.vllm_server_url.rstrip("/")
+    completions_url = f"{base_url}/v1/completions"
+    model_name = args.vllm_model_name or "default"
 
-    # 加载 tokenizer（其中已包含我们在 train.py 中设置的 chat_template）
+    # 加载 tokenizer（含 chat_template，用于构造 prompt）
     tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    # vLLM 模型（直接加载你训练好的 checkpoint 目录）
-    # tensor_parallel_size=4 时使用 4 卡张量并行，gpu_memory_utilization 提高以吃满显存
-    llm = LLM(
-        model=str(model_dir),
-        trust_remote_code=True,
-        tensor_parallel_size=args.tensor_parallel_size,
-        gpu_memory_utilization=args.gpu_memory_utilization,
-        max_model_len=args.max_input_length + args.max_new_tokens,
-    )
-    sampling_params = SamplingParams(
-        max_tokens=args.max_new_tokens,
-        temperature=args.temperature,
-        top_p=args.top_p,
-    )
+    def call_vllm_completions(prompt: str) -> str:
+        """向 vLLM 服务请求单条 completion，返回生成的文本。"""
+        payload = {
+            "prompt": prompt,
+            "max_tokens": args.max_new_tokens,
+            "temperature": args.temperature,
+            "top_p": args.top_p,
+            "model": model_name,
+        }
+        try:
+            r = requests.post(
+                completions_url,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=120,
+            )
+            r.raise_for_status()
+            data = r.json()
+            choices = data.get("choices", [])
+            if not choices:
+                return ""
+            return choices[0].get("text", "")
+        except Exception as e:
+            return f"[ERROR: {e!r}]"
 
     # 用于 wandb 表格：仅记录 prompt / gold / model_response 三列
     table_rows = []
@@ -221,11 +226,17 @@ def main():
         nonlocal total, total_response_chars, table_rows
         if not batch_prompts:
             return
-        outputs = llm.generate(batch_prompts, sampling_params)
-        for i, out in enumerate(outputs):
-            if not out.outputs:
-                continue
-            generated_text = out.outputs[0].text
+        # 并发请求 vLLM 服务
+        generated_texts = [""] * len(batch_prompts)
+        with ThreadPoolExecutor(max_workers=min(len(batch_prompts), args.vllm_batch_size)) as ex:
+            fut_to_i = {ex.submit(call_vllm_completions, p): i for i, p in enumerate(batch_prompts)}
+            for fut in as_completed(fut_to_i):
+                i = fut_to_i[fut]
+                try:
+                    generated_texts[i] = fut.result()
+                except Exception as e:
+                    generated_texts[i] = f"[ERROR: {e!r}]"
+        for i, generated_text in enumerate(generated_texts):
             meta = batch_meta[i]
             sample_index = meta["sample_index"]
             sample = meta["sample"]
@@ -369,14 +380,13 @@ def main():
         wandb.init(project=args.wandb_project, name=run_name, job_type="eval")
         wandb.config.update({
             "model_dir": str(model_dir),
+            "vllm_server_url": args.vllm_server_url,
             "eval_jsonl": str(eval_path),
             "output_jsonl": str(out_path),
             "max_input_length": args.max_input_length,
             "max_new_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "top_p": args.top_p,
-            "tensor_parallel_size": args.tensor_parallel_size,
-            "gpu_memory_utilization": args.gpu_memory_utilization,
             "vllm_batch_size": args.vllm_batch_size,
             "num_samples_evaluated": total,
             "per_turn_eval": args.per_turn_eval,
