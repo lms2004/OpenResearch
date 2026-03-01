@@ -4,7 +4,8 @@
 # 可选：本地检索时先启动 scripts/start_search_service.sh dense 8000
 #
 # 使用 GPT-OSS 时必须指定 MODEL_NAME（与 vLLM 加载的模型路径一致），例如：
-#   MODEL_NAME=/workspace/OpenResearch/openai/gpt-oss-20b bash data_synthesis/03_run_deepsearch.sh
+#   MODEL_NAME=openai/gpt-oss-20b   # 与 start 用 openai/gpt-oss-20b 时一致（先查本地 PROJECT_ROOT/openai/gpt-oss-20b，再 HF）
+#   MODEL_NAME=/workspace/OpenResearch/openai/gpt-oss-20b   # start 用绝对路径时此处也填相同绝对路径
 #
 # 多台 vLLM 服务器（与 start_nemotron_servers.sh 对应，如 TP=2、4 张 GPU→2 台 8001/8002）：
 #   MODEL_NAME=... VLLM_BASE_PORT=8001 VLLM_NUM_SERVERS=2 bash data_synthesis/03_run_deepsearch.sh

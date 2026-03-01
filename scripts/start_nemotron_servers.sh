@@ -30,14 +30,21 @@ export HF_ENDPOINT="https://hf-mirror.com"
 
 # -----------------------------
 # 2) 自动下载模型到本地（目录存在则跳过/断点续传）
-#    - 绝对路径（以 / 开头）或已存在的目录 → 视为本地模型，不下载
-#    - 否则视为 HuggingFace repo（如 org/repo），自动下载到同名本地目录
+#    先查本地：绝对路径或 PROJECT_ROOT/<model> 存在则用本地；否则视为 HF repo，从默认 HF 位置下载到同名本地目录
+#    - 绝对路径（以 / 开头）且目录存在 → 本地模型，不下载
+#    - 相对路径（如 openai/gpt-oss-20b）且 PROJECT_ROOT/openai/gpt-oss-20b 存在 → 本地模型，不下载
+#    - 否则视为 HuggingFace repo（如 openai/gpt-oss-20b），下载到 PROJECT_ROOT/openai/gpt-oss-20b
 # -----------------------------
 MODEL_REPO=""
 LOCAL_DIR="$MODEL_INPUT"
 
 if [[ "$MODEL_INPUT" = /* ]]; then
-    # 绝对路径：一定是本地目录
+    # 绝对路径：必须是已存在的本地目录
+    if [[ ! -d "$MODEL_INPUT" ]]; then
+        echo "Error: Local model path does not exist: $MODEL_INPUT"
+        echo "Use HF repo to download first, e.g.: $0 2 8001 0,1,2,3 openai/gpt-oss-20b 0.7 16000"
+        exit 1
+    fi
     LOCAL_ABS="$MODEL_INPUT"
     MODEL_REPO=""
 elif [[ -d "$PROJECT_ROOT/$MODEL_INPUT" ]]; then
@@ -62,11 +69,11 @@ fi
 # 若是 repo 模式，则执行 huggingface-cli download（支持断点续传；目录存在会复用已下载文件）
 if [ -n "$MODEL_REPO" ]; then
     echo "=========================================="
-    echo "模型自动下载/校验（支持断点续传）"
+    echo "本地模型不存在，从 HF 默认位置下载"
     echo "=========================================="
+    echo "HF repo:    $MODEL_REPO"
     echo "HF_ENDPOINT: $HF_ENDPOINT"
-    echo "Repo:        $MODEL_REPO"
-    echo "Local dir:   $LOCAL_ABS"
+    echo "下载到:     $LOCAL_ABS"
     echo "=========================================="
     mkdir -p "$(dirname "$LOCAL_ABS")"
 
