@@ -95,12 +95,14 @@ def normalize_messages(raw_messages):
                 if tc_id:
                     id_to_tool_name[tc_id] = fn.get("name")
 
-            normalized.append(
-                {
-                    "role": "assistant",
-                    "tool_calls": new_tool_calls,
-                }
-            )
+            out_msg = {
+                "role": "assistant",
+                "tool_calls": new_tool_calls,
+            }
+            reasoning = m.get("reasoning_content")
+            if isinstance(reasoning, str) and reasoning.strip():
+                out_msg["reasoning_content"] = reasoning.strip()
+            normalized.append(out_msg)
 
         # tool 消息：根据 tool_call_id 找回 name 字段
         elif role == "tool":
@@ -114,15 +116,18 @@ def normalize_messages(raw_messages):
                 new_msg["name"] = name
             normalized.append(new_msg)
 
-        # 其他（system / user / 普通 assistant）：只保留 role + content
+        # 其他（system / user / 普通 assistant）：保留 role + content；assistant 若有 reasoning_content 一并保留（供 think 训练）
         else:
             content = m.get("content") or ""
-            normalized.append(
-                {
-                    "role": role,
-                    "content": content,
-                }
-            )
+            out_msg = {
+                "role": role,
+                "content": content,
+            }
+            if role == "assistant":
+                reasoning = m.get("reasoning_content")
+                if isinstance(reasoning, str) and reasoning.strip():
+                    out_msg["reasoning_content"] = reasoning.strip()
+            normalized.append(out_msg)
 
     return normalized
 

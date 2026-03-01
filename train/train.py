@@ -111,6 +111,13 @@ def parse_args():
     p.add_argument("--eval_response_max_new_tokens", type=int, default=256,
                    help="训练时记录响应生成的最大 token 数（默认 256）")
 
+    # 是否在训练中使用 think（reasoning_content / <think> 块）：默认 True；--no_thinking 时去掉推理内容只训正文
+    p.add_argument(
+        "--no_thinking",
+        action="store_true",
+        help="禁用推理训练：从每条消息中移除 reasoning_content，并从 content 中剥离 <think>...</think> 块，仅对正文/工具调用做 SFT",
+    )
+
     return p.parse_args()
 
 
@@ -125,6 +132,30 @@ def ensure_tools_is_json_str(example):
     if isinstance(tools, list):
         example["tools"] = json.dumps(tools, ensure_ascii=False)
     return example
+
+
+def strip_reasoning_from_example(example):
+    """
+    当 --no_thinking 时使用：从每条消息中移除 reasoning_content，
+    并从 assistant 的 content 中剥离 <think>...</think> 块，只保留 </think> 后的正文。
+    """
+    messages = example.get("messages", [])
+    if not messages:
+        return example
+    new_messages = []
+    for m in messages:
+        msg = dict(m)
+        msg.pop("reasoning_content", None)
+        if msg.get("role") == "assistant" and isinstance(msg.get("content"), str):
+            content = msg["content"]
+            if "</think>" in content and "<think>" in content:
+                # 只保留 </think> 之后的部分
+                parts = content.split("</think>", 1)
+                msg["content"] = parts[-1].lstrip("\n").strip() if len(parts) > 1 else content
+            else:
+                msg["content"] = content
+        new_messages.append(msg)
+    return {**example, "messages": new_messages}
 
 
 def _load_tools_for_template(sample):
@@ -256,6 +287,13 @@ def main():
     ds_train = ds_train.map(ensure_tools_is_json_str)
     if ds_val is not None:
         ds_val = ds_val.map(ensure_tools_is_json_str)
+
+    # 2b) 若禁用推理训练，从 messages 中移除 reasoning_content 并剥离 <think>...</think> 块
+    if args.no_thinking:
+        ds_train = ds_train.map(strip_reasoning_from_example, desc="strip_reasoning")
+        if ds_val is not None:
+            ds_val = ds_val.map(strip_reasoning_from_example, desc="strip_reasoning")
+        print("已启用 --no_thinking：训练中不使用 think（reasoning_content / <think> 块），仅训正文与工具调用。")
 
     # 3) 基本字段检查
     cols = ds_train.column_names
