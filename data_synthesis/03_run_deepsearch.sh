@@ -40,6 +40,7 @@ else
 fi
 BROWSER_BACKEND="${BROWSER_BACKEND:-local}"
 MODEL_NAME="${MODEL_NAME:-OpenResearcher/OpenResearcher-30B-A3B}"
+MAX_TURNS="${MAX_TURNS:-60}"
 
 if [ ! -f "$PROBLEMS_JSONL" ]; then
   echo "Error: Problems file not found: $PROBLEMS_JSONL"
@@ -65,6 +66,7 @@ echo "Output:   $OUTPUT_DIR"
 echo "vLLM:     $VLLM_SERVER_URL"
 echo "Search:   $SEARCH_URL ($BROWSER_BACKEND)"
 echo "Model:    $MODEL_NAME"
+echo "Max turns: $MAX_TURNS"
 echo "=========================================="
 
 python deploy_agent.py \
@@ -76,6 +78,7 @@ python deploy_agent.py \
   --browser_backend "$BROWSER_BACKEND" \
   --reasoning_effort high \
   --vllm_server_url "$VLLM_SERVER_URL" \
+  --max_turns "$MAX_TURNS" \
   --max_concurrency_per_worker 32
 
 echo "Done. Trajectories written to $OUTPUT_DIR"

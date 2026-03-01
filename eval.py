@@ -338,7 +338,7 @@ def print_turn_statistics(correct_turns, incorrect_turns):
     print("="*60)
 
 
-def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir):
+def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir, max_turns=None):
     """
     Create visualization plots for turn distribution analysis.
 
@@ -346,6 +346,7 @@ def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir):
         correct_turns: List of turn counts for correct answers
         incorrect_turns: List of turn counts for incorrect answers
         output_dir: Directory to save the plots
+        max_turns: Max turn count for x-axis and uniform binning (0..max_turns). If None, inferred from data.
     """
     try:
         import matplotlib.pyplot as plt
@@ -353,12 +354,20 @@ def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir):
         matplotlib.use('Agg')  # Use non-interactive backend
         import numpy as np
 
+        # Infer max_turns from data if not provided
+        all_turns = (correct_turns or []) + (incorrect_turns or [])
+        if max_turns is None and all_turns:
+            max_turns = max(all_turns)
+        if max_turns is None:
+            max_turns = 60  # default upper bound for empty data
+        max_turns = max(1, int(max_turns))
+
         # Create output directory for plots
         plot_dir = output_dir.rstrip('/') + '/plots'
         os.makedirs(plot_dir, exist_ok=True)
 
-        # Figure 1: Histograms side by side
-        _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir)
+        # Figure 1: Histograms side by side (uniform bins 0..max_turns)
+        _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir, max_turns=max_turns)
 
         # Figure 2: Box plot comparison
         # _create_boxplot(correct_turns, incorrect_turns, plot_dir)
@@ -367,9 +376,9 @@ def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir):
         # _create_cdf_plot(correct_turns, incorrect_turns, plot_dir)
 
         # Figure 4: Overlaid histogram with transparency
-        # _create_overlay_histogram(correct_turns, incorrect_turns, plot_dir)
+        # _create_overlay_histogram(correct_turns, incorrect_turns, plot_dir, max_turns=max_turns)
 
-        print(f"\nAll plots saved to directory: {plot_dir}")
+        print(f"\nAll plots saved to directory: {plot_dir} (x-axis: 0–{max_turns} turns)")
 
     except ImportError:
         print("\nNote: matplotlib not installed. Install with 'pip install matplotlib' to generate plots.")
@@ -377,15 +386,19 @@ def create_turn_distribution_plots(correct_turns, incorrect_turns, output_dir):
         print(f"\nWarning: Could not generate plots: {e}")
 
 
-def _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir):
-    """Create side-by-side histograms for correct and incorrect answers"""
+def _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir, max_turns=60):
+    """Create side-by-side histograms with uniform bins from 0 to max_turns (same x-axis for both)."""
     import matplotlib.pyplot as plt
     import numpy as np
+
+    max_turns = max(1, int(max_turns))
+    # Integer bins: [0, 1, 2, ..., max_turns], so bin edges -0.5, 0.5, 1.5, ..., max_turns+0.5
+    bins = np.arange(-0.5, max_turns + 1.5, 1.0)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     if correct_turns:
-        axes[0].hist(correct_turns, bins=30, alpha=0.7, color='green', edgecolor='black')
+        axes[0].hist(correct_turns, bins=bins, alpha=0.7, color='green', edgecolor='black')
         axes[0].axvline(np.mean(correct_turns), color='red', linestyle='--',
                        linewidth=2, label=f'Mean: {np.mean(correct_turns):.1f}')
         axes[0].axvline(np.median(correct_turns), color='blue', linestyle='--',
@@ -393,11 +406,12 @@ def _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir):
         axes[0].set_xlabel('Number of Turns')
         axes[0].set_ylabel('Frequency')
         axes[0].set_title(f'Correct Answers (n={len(correct_turns)})')
+        axes[0].set_xlim(-0.5, max_turns + 0.5)
         axes[0].legend()
         axes[0].grid(True, alpha=0.3)
 
     if incorrect_turns:
-        axes[1].hist(incorrect_turns, bins=30, alpha=0.7, color='red', edgecolor='black')
+        axes[1].hist(incorrect_turns, bins=bins, alpha=0.7, color='red', edgecolor='black')
         axes[1].axvline(np.mean(incorrect_turns), color='darkred', linestyle='--',
                        linewidth=2, label=f'Mean: {np.mean(incorrect_turns):.1f}')
         axes[1].axvline(np.median(incorrect_turns), color='blue', linestyle='--',
@@ -405,6 +419,7 @@ def _create_side_by_side_histograms(correct_turns, incorrect_turns, plot_dir):
         axes[1].set_xlabel('Number of Turns')
         axes[1].set_ylabel('Frequency')
         axes[1].set_title(f'Incorrect Answers (n={len(incorrect_turns)})')
+        axes[1].set_xlim(-0.5, max_turns + 0.5)
         axes[1].legend()
         axes[1].grid(True, alpha=0.3)
 
@@ -489,28 +504,32 @@ def _create_cdf_plot(correct_turns, incorrect_turns, plot_dir):
     print(f"CDF plot saved to: {cdf_path}")
 
 
-def _create_overlay_histogram(correct_turns, incorrect_turns, plot_dir):
-    """Create overlaid histogram with transparency"""
+def _create_overlay_histogram(correct_turns, incorrect_turns, plot_dir, max_turns=60):
+    """Create overlaid histogram with uniform bins 0..max_turns."""
     import matplotlib.pyplot as plt
     import numpy as np
 
+    max_turns = max(1, int(max_turns))
+    bins = np.arange(-0.5, max_turns + 1.5, 1.0)
+
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    if correct_turns and incorrect_turns:
-        # Determine common bin range
-        all_turns = correct_turns + incorrect_turns
-        bins = np.linspace(min(all_turns), max(all_turns), 40)
+    if correct_turns or incorrect_turns:
+        if correct_turns:
+            ax.hist(correct_turns, bins=bins, alpha=0.5, color='green',
+                   label=f'Correct (n={len(correct_turns)})', edgecolor='black')
+        if incorrect_turns:
+            ax.hist(incorrect_turns, bins=bins, alpha=0.5, color='red',
+                   label=f'Incorrect (n={len(incorrect_turns)})', edgecolor='black')
 
-        ax.hist(correct_turns, bins=bins, alpha=0.5, color='green',
-               label=f'Correct (n={len(correct_turns)})', edgecolor='black')
-        ax.hist(incorrect_turns, bins=bins, alpha=0.5, color='red',
-               label=f'Incorrect (n={len(incorrect_turns)})', edgecolor='black')
+        if correct_turns:
+            ax.axvline(np.mean(correct_turns), color='darkgreen', linestyle='--',
+                      linewidth=2, label=f'Correct Mean: {np.mean(correct_turns):.1f}')
+        if incorrect_turns:
+            ax.axvline(np.mean(incorrect_turns), color='darkred', linestyle='--',
+                      linewidth=2, label=f'Incorrect Mean: {np.mean(incorrect_turns):.1f}')
 
-        ax.axvline(np.mean(correct_turns), color='darkgreen', linestyle='--',
-                  linewidth=2, label=f'Correct Mean: {np.mean(correct_turns):.1f}')
-        ax.axvline(np.mean(incorrect_turns), color='darkred', linestyle='--',
-                  linewidth=2, label=f'Incorrect Mean: {np.mean(incorrect_turns):.1f}')
-
+    ax.set_xlim(-0.5, max_turns + 0.5)
     ax.set_xlabel('Number of Turns')
     ax.set_ylabel('Frequency')
     ax.set_title('Turn Distribution: Correct vs Incorrect Answers (Overlaid)')
@@ -693,6 +712,8 @@ if __name__ == '__main__':
                              "If not provided, will use OPENAI_BASE_URL environment variable.")
     parser.add_argument("--llm", type=str, default=None,
                         help="LLM model name for judging. If not provided, will use OPENAI_MODEL environment variable or default to gpt-4.1-2025-04-14")
+    parser.add_argument("--max_turns", type=int, default=None,
+                        help="Max turns used in trajectories (for plot x-axis and uniform bins). If not set, inferred from data.")
     args = parser.parse_args()
     files = glob.glob(args.input_dir + "/*.jsonl")
     # Exclude evaluated.jsonl to avoid duplicates
@@ -802,7 +823,7 @@ if __name__ == '__main__':
 
     # Create visualization plots
     if correct_turns or incorrect_turns:
-        create_turn_distribution_plots(correct_turns, incorrect_turns, args.input_dir)
+        create_turn_distribution_plots(correct_turns, incorrect_turns, args.input_dir, max_turns=args.max_turns)
 
     # Analyze tool usage
     correct_tool_usage, incorrect_tool_usage = collect_tool_usage_data(correct_cnt_list, incorrect_cnt_list, qid_to_data)

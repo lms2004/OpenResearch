@@ -174,7 +174,7 @@ async def run_one(
     qid: Any,
     generator: Any,
     browser_pool: BrowserPool,
-    max_rounds: int = 50,
+    max_rounds: int = 60,
 ) -> List[dict]:
     """
     Helper function for native tool calling using tokenizer's chat template
@@ -549,7 +549,7 @@ def worker_entry(
                                 qid=qid,
                                 generator=generator,
                                 browser_pool=browser_pool,
-                                max_rounds=100
+                                max_rounds=args.max_turns
                             )
                             dt = time.time() - t0
                             finished_at = datetime.datetime.utcnow().isoformat() + "Z"
@@ -618,6 +618,9 @@ def main():
                              "Single URL: http://localhost:8001/v1 "
                              "Multiple URLs (comma-separated): http://localhost:8001/v1,http://localhost:8002/v1 "
                              "If provided, will use API instead of local vLLM engine (recommended for faster startup)")
+
+    parser.add_argument("--max_turns", type=int, default=60,
+                        help="Maximum number of rounds/turns per question (default: 60)")
 
     args = parser.parse_args()
     print(args)
