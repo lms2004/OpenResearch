@@ -160,6 +160,59 @@ def load_tools_field(sample):
     return tools
 
 
+def normalize_messages_for_vllm_chat(messages: list) -> list:
+    """
+    保证 messages 适配 vLLM /v1/chat/completions 的发送格式：
+    tool_calls 每项必须有 id、type、function；function.arguments 为字符串；
+    其它非 vLLM 字段（如 reasoning_content）不带上。
+    """
+    if not messages:
+        return messages
+    out = []
+    for m in messages:
+        role = m.get("role")
+        if not role:
+            continue
+        msg = {"role": role}
+        content = m.get("content")
+        if content is not None:
+            msg["content"] = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+        elif role in ("system", "user", "tool"):
+            msg["content"] = ""
+        if role == "assistant":
+            tool_calls = m.get("tool_calls")
+            if tool_calls and isinstance(tool_calls, list):
+                normalized_tc = []
+                for i, tc in enumerate(tool_calls):
+                    if not isinstance(tc, dict):
+                        continue
+                    tc = dict(tc)
+                    tid = tc.get("id")
+                    if tid is None or tid == "":
+                        tid = f"call_{i}"
+                    fn = tc.get("function")
+                    if not isinstance(fn, dict) or "name" not in fn:
+                        continue
+                    args_val = fn.get("arguments", "{}")
+                    if isinstance(args_val, dict):
+                        args_val = json.dumps(args_val, ensure_ascii=False)
+                    normalized_tc.append({
+                        "id": str(tid),
+                        "type": "function",
+                        "function": {"name": fn["name"], "arguments": args_val},
+                    })
+                if normalized_tc:
+                    msg["tool_calls"] = normalized_tc
+        elif role == "tool":
+            tc_id = m.get("tool_call_id") or m.get("id")
+            if tc_id is not None:
+                msg["tool_call_id"] = str(tc_id)
+            if m.get("name") is not None:
+                msg["name"] = m["name"]
+        out.append(msg)
+    return out
+
+
 def main():
     args = parse_args()
 
@@ -193,9 +246,11 @@ def main():
 
     def call_vllm_chat_completions(request_messages: list, tools=None) -> str:
         """向 vLLM /v1/chat/completions 请求，返回 assistant 文本（content，若有 reasoning_content 则拼在前面）。"""
+        # 规范化 messages：保证 tool_calls 每项带 id，避免 vLLM Pydantic 校验 400
+        messages_sent = normalize_messages_for_vllm_chat(request_messages)
         payload = {
             "model": model_name,
-            "messages": request_messages,
+            "messages": messages_sent,
             "max_tokens": args.max_new_tokens,
             "temperature": args.temperature,
             "top_p": args.top_p,
