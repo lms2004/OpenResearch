@@ -44,6 +44,8 @@ def main():
     print(f"Port: {args.port}")
     print(f"Tensor Parallel Size: {args.tensor_parallel_size}")
     print(f"GPU Memory Utilization: {args.gpu_memory_utilization}")
+    if args.max_model_len is not None:
+        print(f"Max Model Length: {args.max_model_len}")
     print("=" * 80)
     print("\nServer will be available at:")
     print(f"  http://{args.host}:{args.port}/v1")
