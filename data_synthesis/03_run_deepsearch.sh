@@ -5,6 +5,11 @@
 #
 # 使用 GPT-OSS 时必须指定 MODEL_NAME（与 vLLM 加载的模型路径一致），例如：
 #   MODEL_NAME=/workspace/OpenResearch/openai/gpt-oss-20b bash data_synthesis/03_run_deepsearch.sh
+#
+# 多台 vLLM 服务器（与 start_nemotron_servers.sh 对应，如 TP=2、4 张 GPU→2 台 8001/8002）：
+#   MODEL_NAME=... VLLM_BASE_PORT=8001 VLLM_NUM_SERVERS=2 bash data_synthesis/03_run_deepsearch.sh
+# 或直接写死 URL：
+#   MODEL_NAME=... VLLM_SERVER_URL="http://localhost:8001/v1,http://localhost:8002/v1" bash data_synthesis/03_run_deepsearch.sh
 
 set -e
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -14,7 +19,25 @@ cd "$PROJECT_ROOT"
 PROBLEMS_JSONL="${PROBLEMS_JSONL:-$SCRIPT_DIR/artifacts/problems.jsonl}"
 OUTPUT_DIR="${OUTPUT_DIR:-$SCRIPT_DIR/artifacts/trajectories}"
 SEARCH_URL="${SEARCH_URL:-http://localhost:8000}"
-VLLM_SERVER_URL="${VLLM_SERVER_URL:-http://localhost:8001/v1}"
+# vLLM：支持单 URL 或多服务器（与 start_nemotron_servers.sh 对应）
+# 方式一：直接指定 VLLM_SERVER_URL（单台或多台逗号分隔）
+#   单台: VLLM_SERVER_URL=http://localhost:8001/v1
+#   多台: VLLM_SERVER_URL=http://localhost:8001/v1,http://localhost:8002/v1
+# 方式二：用 VLLM_BASE_PORT + VLLM_NUM_SERVERS 自动拼接（与 start 脚本一致）
+#   start_nemotron_servers.sh 2 8001 0,1,2,3 ... → 2 台：8001、8002
+#   VLLM_BASE_PORT=8001 VLLM_NUM_SERVERS=2 → 同上
+if [ -n "$VLLM_SERVER_URL" ]; then
+  : # 已设置，直接使用
+elif [ -n "$VLLM_BASE_PORT" ] && [ -n "$VLLM_NUM_SERVERS" ]; then
+  VLLM_SERVER_URL=""
+  for i in $(seq 0 $((VLLM_NUM_SERVERS - 1))); do
+    PORT=$((VLLM_BASE_PORT + i))
+    [ -n "$VLLM_SERVER_URL" ] && VLLM_SERVER_URL="$VLLM_SERVER_URL,"
+    VLLM_SERVER_URL="${VLLM_SERVER_URL}http://localhost:${PORT}/v1"
+  done
+else
+  VLLM_SERVER_URL="${VLLM_SERVER_URL:-http://localhost:8001/v1}"
+fi
 BROWSER_BACKEND="${BROWSER_BACKEND:-local}"
 MODEL_NAME="${MODEL_NAME:-OpenResearcher/OpenResearcher-30B-A3B}"
 
