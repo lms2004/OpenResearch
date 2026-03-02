@@ -310,6 +310,17 @@ async def run_one_deep_research(
         metrics.record_round(latency, len(tool_calls))
 
         if verbose:
+            # 原始模型返回（便于排查 tool_calls/arguments 解析问题）
+            raw_display = dict(msg)
+            if isinstance(raw_display.get("content"), str) and len(raw_display["content"]) > 600:
+                raw_display["content"] = raw_display["content"][:600] + "...[truncated]"
+            raw_json = json.dumps(raw_display, ensure_ascii=False, indent=2)
+            if len(raw_json) > 3500:
+                raw_json = raw_json[:3500] + "\n...[truncated]"
+            print(f"  [Raw API message]\n{raw_json}")
+            print()
+
+        if verbose:
             print(f"[Round {round_num}] 时延={latency:.2f}s, tool_calls={len(tool_calls)}")
             if content:
                 preview = content[:500] + ("..." if len(content) > 500 else "")
@@ -347,7 +358,7 @@ async def run_one_deep_research(
                 fn_name = (tc.get("function") or {}).get("name") or "unknown"
                 placeholder = "[Benchmark mode: browser not available, skipping tool execution]"
                 if verbose:
-                    print(f"  [Tool Result] {fn_name} -> {placeholder[:120]}...")
+                    print(f"  [Tool Result] {fn_name} -> {placeholder[:120]}{'...' if len(placeholder) > 120 else ''}")
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
