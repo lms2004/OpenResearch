@@ -188,12 +188,14 @@ def _convert_one_parquet(
     default_correct: bool,
     batch_size: int,
 ) -> list[dict[str, Any]]:
-    """Convert a single parquet file to a list of records (for parallel workers)."""
+    """Convert a single parquet file to a list of records (for parallel workers). Only keeps rows with status == 'success'."""
     records: list[dict[str, Any]] = []
     parquet = pq.ParquetFile(path)
     for batch in parquet.iter_batches(batch_size=batch_size):
         for row in batch.to_pylist():
             record = dict(row)
+            if record.get("status") != "success":
+                continue
             record["messages"] = convert_messages_to_target_format(
                 record.get("messages", [])
             )
@@ -214,7 +216,7 @@ def convert_parquet_to_jsonl(
     workers: int = 1,
 ) -> int:
     """Convert parquet record(s) to one JSONL and optional pretty JSON array.
-    If multiple paths are given, all are read in order and merged into one output.
+    Only rows with status == 'success' are written.
     """
     template_tools: list[dict[str, Any]] = []
     if template_jsonl_path is not None:
@@ -240,6 +242,9 @@ def convert_parquet_to_jsonl(
                 for batch in parquet.iter_batches(batch_size=batch_size):
                     for row in batch.to_pylist():
                         record = dict(row)
+                        if record.get("status") != "success":
+                            pbar.update(1)
+                            continue
                         record["messages"] = convert_messages_to_target_format(
                             record.get("messages", [])
                         )
