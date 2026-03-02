@@ -182,27 +182,47 @@ def _count_parquet_rows(path: Path) -> int:
     return pq.ParquetFile(path).metadata.num_rows
 
 
+def _seed_from_parquet_path(path: Path) -> str:
+    """Extract seed identifier from parquet path, e.g. .../seed_42/train-xxx.parquet -> seed_42."""
+    parent = path.parent.name
+    if parent.startswith("seed_"):
+        return parent
+    return parent or "seed_0"
+
+
+def _make_trajectory_id(seed_str: str, record: dict[str, Any]) -> str:
+    """Unique trajectory ID: seed + qid + chunk_idx + num_chunks."""
+    qid = record.get("qid", 0)
+    chunk_idx = record.get("chunk_idx", 0)
+    num_chunks = record.get("num_chunks", 1)
+    return f"{seed_str}_{qid}_{chunk_idx}_{num_chunks}"
+
+
 def _convert_one_parquet(
     path: Path,
     template_tools: list[dict[str, Any]],
     default_correct: bool,
     batch_size: int,
-) -> list[dict[str, Any]]:
-    """Convert a single parquet file to a list of records (for parallel workers). Only keeps rows with status == 'success'."""
+) -> tuple[list[dict[str, Any]], int]:
+    """Convert a single parquet file. Returns (records, n_skipped). Only keeps rows with status == 'success'. Adds trajectory_id from seed + qid + chunk."""
     records: list[dict[str, Any]] = []
+    n_skipped = 0
+    seed_str = _seed_from_parquet_path(path)
     parquet = pq.ParquetFile(path)
     for batch in parquet.iter_batches(batch_size=batch_size):
         for row in batch.to_pylist():
             record = dict(row)
             if record.get("status") != "success":
+                n_skipped += 1
                 continue
+            record["trajectory_id"] = _make_trajectory_id(seed_str, record)
             record["messages"] = convert_messages_to_target_format(
                 record.get("messages", [])
             )
             record.setdefault("correct", default_correct)
             record.setdefault("tools", template_tools)
             records.append(record)
-    return records
+    return (records, n_skipped)
 
 
 def convert_parquet_to_jsonl(
@@ -236,15 +256,21 @@ def convert_parquet_to_jsonl(
                 out_pretty = output_pretty_json_path.open("w", encoding="utf-8")
                 out_pretty.write("[\n")
 
+            n_success = 0
+            n_skipped = 0
             pbar = tqdm(total=total_from_meta, unit="row", desc="Converting")
             for parquet_path in parquet_paths:
                 parquet = pq.ParquetFile(parquet_path)
+                seed_str = _seed_from_parquet_path(parquet_path)
                 for batch in parquet.iter_batches(batch_size=batch_size):
                     for row in batch.to_pylist():
                         record = dict(row)
                         if record.get("status") != "success":
+                            n_skipped += 1
                             pbar.update(1)
+                            pbar.set_postfix(success=n_success, skipped=n_skipped, refresh=True)
                             continue
+                        record["trajectory_id"] = _make_trajectory_id(seed_str, record)
                         record["messages"] = convert_messages_to_target_format(
                             record.get("messages", [])
                         )
@@ -261,7 +287,9 @@ def convert_parquet_to_jsonl(
                             pretty_rows += 1
 
                         total_rows += 1
+                        n_success += 1
                         pbar.update(1)
+                        pbar.set_postfix(success=n_success, skipped=n_skipped, refresh=True)
                     pbar.refresh()
             pbar.close()
 
@@ -289,7 +317,7 @@ def convert_parquet_to_jsonl(
                     for i, p in enumerate(parquet_paths)
                 }
                 # Collect results in order of parquet_paths
-                results_by_idx: dict[int, list[dict[str, Any]]] = {}
+                results_by_idx: dict[int, tuple[list[dict[str, Any]], int]] = {}
                 with tqdm(
                     total=len(parquet_paths),
                     unit="file",
@@ -300,10 +328,12 @@ def convert_parquet_to_jsonl(
                         results_by_idx[idx] = future.result()
                         pbar.update(1)
 
-            total_to_write = sum(len(results_by_idx[i]) for i in range(len(parquet_paths)))
+            total_to_write = sum(len(results_by_idx[i][0]) for i in range(len(parquet_paths)))
+            total_skipped = sum(results_by_idx[i][1] for i in range(len(parquet_paths)))
             with tqdm(total=total_to_write, unit="row", desc="Writing") as pbar:
                 for i in range(len(parquet_paths)):
-                    for record in results_by_idx[i]:
+                    records_i = results_by_idx[i][0]
+                    for record in records_i:
                         out_jsonl.write(
                             json.dumps(record, ensure_ascii=False) + "\n"
                         )
@@ -316,6 +346,7 @@ def convert_parquet_to_jsonl(
                             pretty_rows += 1
                         total_rows += 1
                         pbar.update(1)
+                        pbar.set_postfix(success=total_rows, skipped=total_skipped, refresh=True)
 
             if out_pretty is not None:
                 out_pretty.write("\n]\n")

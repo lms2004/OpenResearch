@@ -691,15 +691,19 @@ class LLMJudge:
                     messages=[{"role": "user", "content": prompt}],
                 )
                 response = parse_judge_response(chat_completion.choices[0].message.content)
-                response["qid"]=data['qid']
-                response["question"]=question
+                response["qid"] = data["qid"]
+                response["trajectory_id"] = data.get("trajectory_id")
+                response["question"] = question
                 response["gen_output"]=gen_output
                 response["correct_answer"]=answer
                 response["content"]=chat_completion.choices[0].message.content
                 return response
             except Exception as e:
                 if attempt == self.max_retries:
-                    return {"correct": False, "error": str(e)}
+                    out = {"correct": False, "error": str(e)}
+                    out["qid"] = data.get("qid")
+                    out["trajectory_id"] = data.get("trajectory_id")
+                    return out
                 backoff = 0.5 * (2 ** (attempt - 1)) + random.uniform(0, 0.2)
                 time.sleep(backoff)
                 
@@ -721,8 +725,8 @@ if __name__ == '__main__':
     data = []
     for file in files:
         data.extend([json.loads(x) for x in open(file).readlines()])
-    assert len(set([x['qid'] for x in data])) == len(data)
-    
+    # Evaluate by trajectory: duplicate qid allowed; trajectory_id distinguishes trajectories
+    assert len(data) > 0, "No data to evaluate"
     clean_data = []
     error_data = []
     for d in data:
@@ -748,20 +752,20 @@ if __name__ == '__main__':
         print(f"Using base URL: {args.base_url}")
     output = judger.judge(clean_data)
 
-    # Create saved_output: judge result + timing fields from trajectory (latency_s, num_rounds, num_tool_calls, etc.)
+    # Create saved_output: judge result + timing fields from trajectory; key by trajectory_id
     keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
     timing_keys = ["latency_s", "num_rounds", "num_tool_calls", "started_at", "finished_at"]
-    qid_to_clean = {d["qid"]: d for d in clean_data}
+    clean_by_tid = {d["trajectory_id"]: d for d in clean_data if d.get("trajectory_id")}
     saved_output = []
     for item in output:
         saved_item = {k: v for k, v in item.items() if k not in keys_to_remove}
-        qid = item.get("qid")
-        if qid is not None and qid in qid_to_clean:
+        tid = item.get("trajectory_id")
+        if tid and tid in clean_by_tid:
             for k in timing_keys:
-                if k in qid_to_clean[qid]:
-                    saved_item[k] = qid_to_clean[qid][k]
+                if k in clean_by_tid[tid]:
+                    saved_item[k] = clean_by_tid[tid][k]
         saved_output.append(saved_item)
-    saved_output.sort(key=lambda x: x["qid"])
+    saved_output.sort(key=lambda x: (x.get("trajectory_id") or "", x.get("qid", 0)))
 
     # Save to output file
     output_file = args.input_dir.rstrip('/') + '/evaluated.jsonl'
