@@ -7,7 +7,8 @@ Kimi-K2 使用 OpenAI 兼容接口，支持 chat/completions + tools。
 本脚本运行一条问题的完整 deep research 多轮对话，并输出：
   - 端到端时延 (s)
   - 轮次数、平均单轮时延 (s)、轮次速度 (rounds/min)
-  - 首轮/末轮时延、总 tool calls 等
+  - 首轮/末轮时延、总 tool calls
+  - 每轮及总计的 token 消耗（输入/输出/总）、平均每轮 token
 
 Usage:
   # 使用 .env 中的 OPENAI_BASE_URL + OPENAI_API_KEY + OPENAI_MODEL（与 .env.template 一致）
@@ -140,6 +141,8 @@ class RoundMetrics:
     def __init__(self) -> None:
         self.round_latencies: List[float] = []  # 每轮 API 时延 (s)
         self.tool_call_count_per_round: List[int] = []
+        self.input_tokens_per_round: List[int] = []   # 每轮输入 token（prompt）
+        self.output_tokens_per_round: List[int] = []  # 每轮输出 token（completion）
         self.e2e_start: Optional[float] = None
         self.e2e_end: Optional[float] = None
 
@@ -147,11 +150,28 @@ class RoundMetrics:
         self.round_latencies.append(latency_s)
         self.tool_call_count_per_round.append(num_tool_calls)
 
+    def record_tokens(self, input_tokens: int, output_tokens: int) -> None:
+        """记录本轮的 token 消耗（需在 record_round 之后按轮调用）。"""
+        self.input_tokens_per_round.append(input_tokens)
+        self.output_tokens_per_round.append(output_tokens)
+
     def start_e2e(self) -> None:
         self.e2e_start = time.perf_counter()
 
     def end_e2e(self) -> None:
         self.e2e_end = time.perf_counter()
+
+    @property
+    def total_input_tokens(self) -> int:
+        return sum(self.input_tokens_per_round)
+
+    @property
+    def total_output_tokens(self) -> int:
+        return sum(self.output_tokens_per_round)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.total_input_tokens + self.total_output_tokens
 
     @property
     def e2e_latency_s(self) -> float:
@@ -172,7 +192,14 @@ class RoundMetrics:
             "端到端时延_s": round(self.e2e_latency_s, 3),
             "轮次数": self.num_rounds,
             "总_tool_calls": self.total_tool_calls,
+            "总输入token": self.total_input_tokens,
+            "总输出token": self.total_output_tokens,
+            "总token": self.total_tokens,
         }
+        if self.num_rounds and self.total_tokens > 0:
+            s["平均每轮输入token"] = round(self.total_input_tokens / self.num_rounds, 1)
+            s["平均每轮输出token"] = round(self.total_output_tokens / self.num_rounds, 1)
+            s["平均每轮token"] = round(self.total_tokens / self.num_rounds, 1)
         if self.round_latencies:
             avg = sum(self.round_latencies) / len(self.round_latencies)
             s["平均单轮时延_s"] = round(avg, 3)
@@ -323,6 +350,7 @@ async def run_one_deep_research(
             if verbose:
                 print(f"[Round {round_num}] API error: {e}")
             metrics.record_round(time.perf_counter() - t0, 0)
+            metrics.record_tokens(0, 0)
             metrics.end_e2e()
             return messages, metrics
         latency = time.perf_counter() - t0
@@ -330,6 +358,7 @@ async def run_one_deep_research(
         choices = resp.get("choices") or []
         if not choices:
             metrics.record_round(latency, 0)
+            metrics.record_tokens(0, 0)
             metrics.end_e2e()
             return messages, metrics
 
@@ -337,7 +366,13 @@ async def run_one_deep_research(
         content = (msg.get("content") or "").strip()
         tool_calls = extract_tool_calls_from_message(msg)
 
+        # 从 API 返回的 usage 中取 token 消耗（兼容 prompt_tokens/completion_tokens 与 input_tokens/output_tokens）
+        usage = resp.get("usage") or {}
+        input_tokens = usage.get("input_tokens") or usage.get("prompt_tokens") or 0
+        output_tokens = usage.get("completion_tokens") or usage.get("output_tokens") or 0
+
         metrics.record_round(latency, len(tool_calls))
+        metrics.record_tokens(input_tokens, output_tokens)
 
         if verbose:
             # 原始模型返回（便于排查 tool_calls/arguments 解析问题）
@@ -351,7 +386,7 @@ async def run_one_deep_research(
             print()
 
         if verbose:
-            print(f"[Round {round_num}] 时延={latency:.2f}s, tool_calls={len(tool_calls)}")
+            print(f"[Round {round_num}] 时延={latency:.2f}s, tool_calls={len(tool_calls)}, input_tokens={input_tokens}, output_tokens={output_tokens}")
             if content:
                 preview = content[:500] + ("..." if len(content) > 500 else "")
                 print(f"  [Assistant] {preview}")
@@ -611,15 +646,20 @@ def main() -> None:
             print(f"Deep Research 速度指标 (Kimi-K2 API) — 共 {n} 条样本")
             print("=" * 60)
             for i, s in enumerate(all_summaries):
-                print(f"  [{i+1}] qid={s.get('qid')} 端到端时延_s={s.get('端到端时延_s')} 轮次数={s.get('轮次数')} 总_tool_calls={s.get('总_tool_calls')}")
+                print(f"  [{i+1}] qid={s.get('qid')} 端到端时延_s={s.get('端到端时延_s')} 轮次数={s.get('轮次数')} 总_tool_calls={s.get('总_tool_calls')} 总token={s.get('总token')}")
             if n > 0:
                 avg_e2e = sum(s.get("端到端时延_s", 0) for s in all_summaries) / n
                 avg_rounds = sum(s.get("轮次数", 0) for s in all_summaries) / n
                 total_tools = sum(s.get("总_tool_calls", 0) for s in all_summaries)
+                total_in = sum(s.get("总输入token", 0) for s in all_summaries)
+                total_out = sum(s.get("总输出token", 0) for s in all_summaries)
+                total_tok = sum(s.get("总token", 0) for s in all_summaries)
                 print("  ---")
                 print(f"  平均端到端时延_s: {round(avg_e2e, 3)}")
                 print(f"  平均轮次数: {round(avg_rounds, 2)}")
                 print(f"  总_tool_calls: {total_tools}")
+                print(f"  总输入token: {total_in}  总输出token: {total_out}  总token: {total_tok}")
+                print(f"  平均每条样本 输入token: {round(total_in / n, 1)}  输出token: {round(total_out / n, 1)}  总token: {round(total_tok / n, 1)}")
             print("=" * 60)
             out_path = os.getenv("BENCH_OUTPUT_JSON")
             if out_path:
