@@ -1,5 +1,6 @@
 import argparse
 import time, random, math
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from tqdm import tqdm
@@ -31,6 +32,24 @@ correct: Answer 'yes' if extracted_final_answer matches the [correct_answer] giv
 
 confidence: The extracted confidence score between 0% and 100% from [response]. Put 100 if there is no confidence score available.
 """.strip()
+
+
+def _line_count(path):
+    """Return number of lines in file using wc -l (faster than Python iteration)."""
+    try:
+        result = subprocess.run(
+            ['wc', '-l', path],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            return 0
+        # Output is like "  1234 path\n"
+        parts = result.stdout.strip().split()
+        return int(parts[0]) if parts else 0
+    except Exception:
+        return 0
 
 
 def parse_judge_response(judge_response: str) -> dict:
@@ -639,6 +658,7 @@ class LLMJudge:
         qps = 50,
         max_retries=5,
         base_url=None,
+        max_workers=20,
     ):
         # Use provided llm, or fall back to environment variable, or use default
         if llm is None:
@@ -656,7 +676,7 @@ class LLMJudge:
         self.client = openai.Client(**client_kwargs)
         self.rate_limiter = ThreadRateLimiter(qps)
         self.qps = qps
-        self.max_workers=20
+        self.max_workers = max_workers
         self.max_retries = max_retries
         
     def judge(self,data):
@@ -718,6 +738,8 @@ if __name__ == '__main__':
                         help="LLM model name for judging. If not provided, will use OPENAI_MODEL environment variable or default to gpt-4.1-2025-04-14")
     parser.add_argument("--max_turns", type=int, default=None,
                         help="Max turns used in trajectories (for plot x-axis and uniform bins). If not set, inferred from data.")
+    parser.add_argument("--workers", type=int, default=32,
+                        help="Number of concurrent workers for judging (default: 32).")
     args = parser.parse_args()
 
     print("=" * 60)
@@ -734,17 +756,15 @@ if __name__ == '__main__':
     data = []
     for file in sorted(files):
         fname = os.path.basename(file)
-        # First pass: count lines (streaming) for progress bar total
-        with open(file, encoding='utf-8') as f:
-            total_lines = sum(1 for line in f if line.strip())
+        total_lines = _line_count(file)
         n = 0
         with open(file, encoding='utf-8') as f:
             pbar = tqdm(total=total_lines, desc=f"Loading {fname}", unit=" lines")
             for line in f:
+                pbar.update(1)
                 line = line.strip()
                 if not line:
                     continue
-                pbar.update(1)
                 try:
                     data.append(json.loads(line))
                     n += 1
@@ -778,9 +798,10 @@ if __name__ == '__main__':
     print(f"\nJudge model: {llm}")
     if base_url:
         print(f"Base URL: {base_url}")
+    print(f"Workers: {args.workers}")
     print(f"Judging {len(clean_data)} trajectories...\n")
 
-    judger = LLMJudge(llm=llm, base_url=base_url)
+    judger = LLMJudge(llm=llm, base_url=base_url, max_workers=args.workers)
     output = judger.judge(clean_data)
     print(f"\nJudged {len(output)} trajectories.")
 
