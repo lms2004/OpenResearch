@@ -679,12 +679,16 @@ class LLMJudge:
         self.max_workers = max_workers
         self.max_retries = max_retries
         
-    def judge(self,data):
+    def judge(self, data, on_result=None):
+        """Judge all items. If on_result is provided, call it with each result immediately (for streaming write)."""
         output = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
             futures = [ex.submit(self._judge, d) for d in data]
             for f in tqdm(as_completed(futures), total=len(futures), desc="Judging", unit=" traj"):
-                output.append(f.result())
+                result = f.result()
+                if on_result is not None:
+                    on_result(result)
+                output.append(result)
         return output
     
     def _judge(self, data):
@@ -791,6 +795,32 @@ if __name__ == '__main__':
     print(f"Success samples (to judge): {len(clean_data)}")
     print(f"Error samples (skipped): {len(error_data)}")
 
+    print(f"\nTotal samples: {len(data)}")
+    print(f"Success samples (to judge): {len(clean_data)}")
+    print(f"Error samples (skipped): {len(error_data)}")
+
+    output_file = args.input_dir.rstrip('/') + '/evaluated.jsonl'
+    keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
+    timing_keys = ["latency_s", "num_rounds", "num_tool_calls", "started_at", "finished_at"]
+    clean_by_tid = {d["trajectory_id"]: d for d in clean_data if d.get("trajectory_id")}
+
+    # Resume: skip trajectories already in evaluated.jsonl
+    done_tids = set()
+    if os.path.exists(output_file):
+        with open(output_file, encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    rec = json.loads(line)
+                    tid = rec.get("trajectory_id")
+                    if tid is not None:
+                        done_tids.add(tid)
+                except json.JSONDecodeError:
+                    pass
+    to_judge = [d for d in clean_data if d.get("trajectory_id") not in done_tids]
+    print(f"\nAlready evaluated: {len(done_tids)} | To judge this run: {len(to_judge)}")
+
     # Determine llm: command line arg > env var > default
     llm = args.llm if args.llm else os.getenv('OPENAI_MODEL', 'gpt-4.1-2025-04-14')
     base_url = args.base_url if args.base_url else os.getenv('OPENAI_BASE_URL')
@@ -799,36 +829,45 @@ if __name__ == '__main__':
     if base_url:
         print(f"Base URL: {base_url}")
     print(f"Workers: {args.workers}")
-    print(f"Judging {len(clean_data)} trajectories...\n")
 
-    judger = LLMJudge(llm=llm, base_url=base_url, max_workers=args.workers)
-    output = judger.judge(clean_data)
-    print(f"\nJudged {len(output)} trajectories.")
+    if to_judge:
+        print(f"Judging {len(to_judge)} trajectories (streaming to {output_file})...\n")
+        judger = LLMJudge(llm=llm, base_url=base_url, max_workers=args.workers)
+        write_lock = Lock()
 
-    # Create saved_output: judge result + timing fields from trajectory; key by trajectory_id
-    keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
-    timing_keys = ["latency_s", "num_rounds", "num_tool_calls", "started_at", "finished_at"]
-    clean_by_tid = {d["trajectory_id"]: d for d in clean_data if d.get("trajectory_id")}
-    saved_output = []
-    for item in output:
-        saved_item = {k: v for k, v in item.items() if k not in keys_to_remove}
-        tid = item.get("trajectory_id")
-        if tid and tid in clean_by_tid:
-            for k in timing_keys:
-                if k in clean_by_tid[tid]:
-                    saved_item[k] = clean_by_tid[tid][k]
-        saved_output.append(saved_item)
-    saved_output.sort(key=lambda x: (x.get("trajectory_id") or "", x.get("qid", 0)))
+        def on_result(item):
+            saved_item = {k: v for k, v in item.items() if k not in keys_to_remove}
+            tid = item.get("trajectory_id")
+            if tid and tid in clean_by_tid:
+                for k in timing_keys:
+                    if k in clean_by_tid[tid]:
+                        saved_item[k] = clean_by_tid[tid][k]
+            with write_lock:
+                f_out.write(json.dumps(saved_item, ensure_ascii=False) + '\n')
+                f_out.flush()
 
-    # Save to output file
-    output_file = args.input_dir.rstrip('/') + '/evaluated.jsonl'
-    with open(output_file, 'w', encoding='utf-8') as f:
-        for item in saved_output:
-            f.write(json.dumps(item, ensure_ascii=False) + '\n')
+        with open(output_file, 'a', encoding='utf-8') as f_out:
+            judger.judge(to_judge, on_result=on_result)
+        print(f"\nJudged {len(to_judge)} trajectories (results appended to file).")
+    else:
+        print("Nothing new to judge; using existing evaluated.jsonl for summary.")
 
-    print(f"Results saved to: {output_file}\n")
-    
-    parsed_output = [x for x in output if not x.get('parse_error', True)]
+    # Load full results from file for summary (single source of truth)
+    all_output = []
+    if os.path.exists(output_file):
+        with open(output_file, encoding='utf-8') as f:
+            for line in f:
+                if not line.strip():
+                    continue
+                try:
+                    all_output.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    all_output.sort(key=lambda x: (x.get("trajectory_id") or "", x.get("qid", 0)))
+    print(f"Results in file: {output_file} ({len(all_output)} trajectories)\n")
+
+    output = all_output
+    parsed_output = [x for x in output if isinstance(x.get('correct'), bool)]
     correct_cnt_list = [x for x in parsed_output if x.get('correct') is True]
     incorrect_cnt_list = [x for x in parsed_output if x.get('correct') is False]
 
