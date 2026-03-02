@@ -719,12 +719,24 @@ if __name__ == '__main__':
     parser.add_argument("--max_turns", type=int, default=None,
                         help="Max turns used in trajectories (for plot x-axis and uniform bins). If not set, inferred from data.")
     args = parser.parse_args()
+
+    print("=" * 60)
+    print("Evaluation (trajectory-level judge)")
+    print("=" * 60)
+    print(f"Input dir: {args.input_dir}")
+
     files = glob.glob(args.input_dir + "/*.jsonl")
     # Exclude evaluated.jsonl to avoid duplicates
     files = [f for f in files if not f.endswith('evaluated.jsonl')]
+    if not files:
+        raise SystemExit(f"No .jsonl files found in {args.input_dir} (excluding evaluated.jsonl). Put parsed/materialized JSONL there first.")
+
     data = []
-    for file in files:
-        data.extend([json.loads(x) for x in open(file).readlines()])
+    for file in sorted(files):
+        lines = open(file, encoding='utf-8').readlines()
+        n = sum(1 for line in lines if line.strip())
+        data.extend([json.loads(line) for line in lines if line.strip()])
+        print(f"  Loaded: {os.path.basename(file)} -> {n} lines")
     # Evaluate by trajectory: duplicate qid allowed; trajectory_id distinguishes trajectories
     assert len(data) > 0, "No data to evaluate"
     clean_data = []
@@ -734,23 +746,28 @@ if __name__ == '__main__':
             clean_data.append(d)
         else:
             error_data.append(d)
+
+    n_with_tid = sum(1 for d in clean_data if d.get("trajectory_id"))
+    if n_with_tid < len(clean_data):
+        print(f"  Warning: {len(clean_data) - n_with_tid} success records without trajectory_id (use parse.py/materialized JSONL for correct pipeline).")
+    print(f"  Trajectories with trajectory_id: {n_with_tid} / {len(clean_data)}")
     
-    print(f"Total samples: {len(data)}")
-    print(f"Success samples: {len(clean_data)}")
-    print(f"Error samples: {len(error_data)}")
+    print(f"\nTotal samples: {len(data)}")
+    print(f"Success samples (to judge): {len(clean_data)}")
+    print(f"Error samples (skipped): {len(error_data)}")
 
     # Determine llm: command line arg > env var > default
     llm = args.llm if args.llm else os.getenv('OPENAI_MODEL', 'gpt-4.1-2025-04-14')
     base_url = args.base_url if args.base_url else os.getenv('OPENAI_BASE_URL')
     
-    print(f"Using model: {llm}")
+    print(f"\nJudge model: {llm}")
     if base_url:
-        print(f"Using base URL: {base_url}")
-    
+        print(f"Base URL: {base_url}")
+    print(f"Judging {len(clean_data)} trajectories...\n")
+
     judger = LLMJudge(llm=llm, base_url=base_url)
-    if args.base_url:
-        print(f"Using base URL: {args.base_url}")
     output = judger.judge(clean_data)
+    print(f"\nJudged {len(output)} trajectories.")
 
     # Create saved_output: judge result + timing fields from trajectory; key by trajectory_id
     keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
@@ -773,7 +790,7 @@ if __name__ == '__main__':
         for item in saved_output:
             f.write(json.dumps(item, ensure_ascii=False) + '\n')
 
-    print(f"\nResults saved to: {output_file}\n")
+    print(f"Results saved to: {output_file}\n")
     
     parsed_output = [x for x in output if not x.get('parse_error', True)]
     correct_cnt_list = [x for x in parsed_output if x.get('correct') is True]
