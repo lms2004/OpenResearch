@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -60,6 +62,68 @@ def discover_parquet_paths(dataset_dir: Path, seeds: list[int] | None) -> list[P
     return out
 
 
+def _process_parquet_chunk(
+    paths: list[Path],
+    allowlist: set[str],
+    batch_size: int,
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Process a chunk of parquet paths; return (by_seed, labels). Used in worker process."""
+    by_seed: dict[str, list[dict[str, Any]]] = {}
+    labels: list[dict[str, Any]] = []
+    for path in paths:
+        seed_str = _seed_from_parquet_path(path)
+        pf = pq.ParquetFile(path)
+        for batch in pf.iter_batches(batch_size=batch_size):
+            for row in batch.to_pylist():
+                record = dict(row)
+                tid = _make_trajectory_id(seed_str, record)
+                if tid not in allowlist:
+                    continue
+                if seed_str not in by_seed:
+                    by_seed[seed_str] = []
+                by_seed[seed_str].append(record)
+                labels.append({
+                    "trajectory_id": tid,
+                    "seed": seed_str,
+                    "qid": record.get("qid"),
+                    "chunk_idx": record.get("chunk_idx"),
+                    "num_chunks": record.get("num_chunks"),
+                    "status": record.get("status"),
+                    "label": record.get("correct"),
+                    "included": True,
+                })
+    return by_seed, labels
+
+
+def _merge_worker_results(
+    results: list[tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]],
+) -> tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]:
+    """Merge (by_seed, labels) from multiple workers."""
+    merged_seed: dict[str, list[dict[str, Any]]] = {}
+    merged_labels: list[dict[str, Any]] = []
+    for by_seed, labels in results:
+        for seed_str, rows in by_seed.items():
+            if seed_str not in merged_seed:
+                merged_seed[seed_str] = []
+            merged_seed[seed_str].extend(rows)
+        merged_labels.extend(labels)
+    return merged_seed, merged_labels
+
+
+def _write_one_seed(
+    item: tuple[str, list[dict[str, Any]]],
+    output_dir: Path,
+) -> tuple[str, int]:
+    """Write one seed's parquet; return (seed_str, row_count). Used in thread pool."""
+    seed_str, rows = item
+    out_seed_dir = output_dir / seed_str
+    out_seed_dir.mkdir(parents=True, exist_ok=True)
+    table = pa.Table.from_pylist(rows)
+    out_path = out_seed_dir / "train.parquet"
+    pq.write_table(table, out_path)
+    return seed_str, len(rows)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Export trajectories (by trajectory_id allowlist) to per-seed parquet dirs."
@@ -95,6 +159,12 @@ def main() -> None:
         default=1024,
         help="Batch size when reading parquet (default 1024).",
     )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of parallel workers for scanning parquet (default: 16).",
+    )
     args = parser.parse_args()
 
     allowlist = load_trajectory_id_allowlist(args.allowlist)
@@ -104,44 +174,75 @@ def main() -> None:
     if not parquet_paths:
         raise SystemExit("No parquet files found under dataset-dir.")
 
-    # Collect kept rows by seed (seed_str -> list of row dicts)
+    n_workers = args.workers
+    if n_workers is None:
+        n_workers = 16
+    n_workers = max(1, n_workers)
+    print(f"Using {n_workers} worker(s) for scanning.")
+
+    # Distribute paths across workers
+    chunk_size = max(1, (len(parquet_paths) + n_workers - 1) // n_workers)
+    chunks: list[list[Path]] = []
+    for i in range(0, len(parquet_paths), chunk_size):
+        chunks.append(parquet_paths[i : i + chunk_size])
+
     by_seed: dict[str, list[dict[str, Any]]] = {}
     labels: list[dict[str, Any]] = []
 
-    for path in tqdm(parquet_paths, desc="Scanning parquet", unit=" files"):
-        seed_str = _seed_from_parquet_path(path)
-        pf = pq.ParquetFile(path)
-        for batch in pf.iter_batches(batch_size=args.batch_size):
-            for row in batch.to_pylist():
-                record = dict(row)
-                tid = _make_trajectory_id(seed_str, record)
-                if tid not in allowlist:
-                    continue
-                if seed_str not in by_seed:
-                    by_seed[seed_str] = []
-                by_seed[seed_str].append(record)
-                labels.append({
-                    "trajectory_id": tid,
-                    "seed": seed_str,
-                    "qid": record.get("qid"),
-                    "chunk_idx": record.get("chunk_idx"),
-                    "num_chunks": record.get("num_chunks"),
-                    "status": record.get("status"),
-                    "label": record.get("correct"),
-                    "included": True,
-                })
+    if len(chunks) == 1:
+        by_seed, labels = _process_parquet_chunk(
+            chunks[0], allowlist, args.batch_size
+        )
+    else:
+        worker_results: list[tuple[dict[str, list[dict[str, Any]]], list[dict[str, Any]]]] = []
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            futures = {
+                executor.submit(
+                    _process_parquet_chunk,
+                    chunk,
+                    allowlist,
+                    args.batch_size,
+                ): i
+                for i, chunk in enumerate(chunks)
+            }
+            for fut in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Scanning parquet",
+                unit=" chunks",
+            ):
+                worker_results.append(fut.result())
+        by_seed, labels = _merge_worker_results(worker_results)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    for seed_str, rows in tqdm(
-        by_seed.items(), desc="Writing parquet", unit=" seeds"
-    ):
-        out_seed_dir = args.output_dir / seed_str
-        out_seed_dir.mkdir(parents=True, exist_ok=True)
-        table = pa.Table.from_pylist(rows)
-        out_path = out_seed_dir / "train.parquet"
-        pq.write_table(table, out_path)
-        print(f"Wrote {len(rows)} rows -> {out_path}")
+    # Parallel write per-seed parquet files
+    write_workers = min(n_workers, len(by_seed))
+    if write_workers <= 1:
+        for seed_str, rows in tqdm(
+            by_seed.items(), desc="Writing parquet", unit=" seeds"
+        ):
+            out_seed_dir = args.output_dir / seed_str
+            out_seed_dir.mkdir(parents=True, exist_ok=True)
+            table = pa.Table.from_pylist(rows)
+            out_path = out_seed_dir / "train.parquet"
+            pq.write_table(table, out_path)
+            print(f"Wrote {len(rows)} rows -> {out_path}")
+    else:
+        items = list(by_seed.items())
+        with ThreadPoolExecutor(max_workers=write_workers) as executor:
+            write_futs = {
+                executor.submit(_write_one_seed, item, args.output_dir): item[0]
+                for item in items
+            }
+            for fut in tqdm(
+                as_completed(write_futs),
+                total=len(write_futs),
+                desc="Writing parquet",
+                unit=" seeds",
+            ):
+                seed_str, count = fut.result()
+                print(f"Wrote {count} rows -> {args.output_dir / seed_str / 'train.parquet'}")
 
     labels_path = args.output_dir / "trajectory_labels.jsonl"
     with labels_path.open("w", encoding="utf-8") as f:
