@@ -243,16 +243,42 @@ async def run_one_deep_research(
     metrics = RoundMetrics()
     metrics.start_e2e()
 
+    if verbose:
+        print("\n--- Deep Research 开始 ---")
+        print(f"Question: {question[:400]}{'...' if len(question) > 400 else ''}\n")
+
     for round_num in range(1, max_rounds + 1):
-        # 发给 API 的 messages：只保留 role/content/tool_calls/tool_call_id
+        # 发给 API 的 messages：只保留 role/content/tool_calls/tool_call_id（火山引擎等要求 tool 消息带 name，arguments 为字符串）
         api_messages = []
         for m in messages:
-            api_messages.append({
+            msg_out = {
                 "role": m["role"],
                 "content": m.get("content") or "",
-                **({} if "tool_calls" not in m else {"tool_calls": m["tool_calls"]}),
-                **({} if "tool_call_id" not in m else {"tool_call_id": m["tool_call_id"]}),
-            })
+            }
+            if "tool_calls" in m:
+                # 确保 function.arguments 为 JSON 字符串（火山引擎 / 豆包要求）
+                normalized_tool_calls = []
+                for tc in m["tool_calls"]:
+                    fn = (tc.get("function") or {}).copy()
+                    args = fn.get("arguments")
+                    if isinstance(args, dict):
+                        fn["arguments"] = json.dumps(args, ensure_ascii=False)
+                    elif args is None:
+                        fn["arguments"] = "{}"
+                    normalized_tool_calls.append({
+                        "id": tc.get("id", ""),
+                        "type": tc.get("type", "function"),
+                        "function": fn,
+                    })
+                msg_out["tool_calls"] = normalized_tool_calls
+            if "tool_call_id" in m:
+                msg_out["tool_call_id"] = m["tool_call_id"]
+            if m.get("role") == "tool" and "name" in m:
+                msg_out["name"] = m["name"]
+            # 火山引擎：assistant 仅 tool_calls 时 content 可为 null
+            if m.get("role") == "assistant" and msg_out.get("tool_calls") and not (msg_out.get("content") or "").strip():
+                msg_out["content"] = None
+            api_messages.append(msg_out)
 
         t0 = time.perf_counter()
         try:
@@ -285,6 +311,20 @@ async def run_one_deep_research(
 
         if verbose:
             print(f"[Round {round_num}] 时延={latency:.2f}s, tool_calls={len(tool_calls)}")
+            if content:
+                preview = content[:500] + ("..." if len(content) > 500 else "")
+                print(f"  [Assistant] {preview}")
+            for tc in (tool_calls or []):
+                fn = (tc.get("function") or {})
+                name = fn.get("name", "?")
+                args = fn.get("arguments", {})
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args) if args else {}
+                    except json.JSONDecodeError:
+                        args = {"raw": args[:200]}
+                print(f"  [Tool Call] {name} args={json.dumps(args, ensure_ascii=False)[:300]}")
+            print()
 
         # 追加 assistant 消息
         assistant_msg = {"role": "assistant", "content": content}
@@ -296,16 +336,23 @@ async def run_one_deep_research(
             if is_final_answer(content):
                 if verbose:
                     print("检测到最终答案，结束。")
+                    if content:
+                        print(f"  [Final Answer] {content[:800]}{'...' if len(content) > 800 else ''}\n")
             break
 
         # 执行 tool calls
         if not browser_pool:
             # 无 browser 时用占位结果继续，便于仅测 API 轮次时延
             for tc in tool_calls:
+                fn_name = (tc.get("function") or {}).get("name") or "unknown"
+                placeholder = "[Benchmark mode: browser not available, skipping tool execution]"
+                if verbose:
+                    print(f"  [Tool Result] {fn_name} -> {placeholder[:120]}...")
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.get("id", ""),
-                    "content": "[Benchmark mode: browser not available, skipping tool execution]",
+                    "name": fn_name,
+                    "content": placeholder,
                 })
             continue
 
@@ -326,11 +373,21 @@ async def run_one_deep_research(
                     result = await browser_pool.call_tool(qid, actual_name, args)
                 except Exception as e:
                     result = f"Error: {e}"
-                messages.append({"role": "tool", "tool_call_id": tid, "content": result or "ok"})
+                if verbose:
+                    result_preview = (result or "ok")[:400] + ("..." if len(result or "") > 400 else "")
+                    print(f"  [Tool Result] {fn or actual_name} -> {result_preview}")
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tid,
+                    "name": fn or "unknown",
+                    "content": result or "ok",
+                })
         finally:
             browser_pool.cleanup(qid)
 
     metrics.end_e2e()
+    if verbose:
+        print("--- Deep Research 结束 ---\n")
     return messages, metrics
 
 
