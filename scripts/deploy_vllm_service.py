@@ -20,10 +20,9 @@ def main():
     parser.add_argument("--max_model_len", type=int, default=None, help="Max model length")
     args = parser.parse_args()
 
-    # Build vLLM command
+    # Use "vllm serve" so --max-model-len is applied to the engine (avoids model default 7808 cap).
     cmd_parts = [
-        "python", "-m", "vllm.entrypoints.openai.api_server",
-        "--model", args.model,
+        "vllm", "serve", args.model,
         "--host", args.host,
         "--port", str(args.port),
         "--tensor-parallel-size", str(args.tensor_parallel_size),
@@ -31,7 +30,6 @@ def main():
         "--trust-remote-code",
         "--enable-prefix-caching",
     ]
-
     if args.max_model_len:
         cmd_parts.extend(["--max-model-len", str(args.max_model_len)])
 
