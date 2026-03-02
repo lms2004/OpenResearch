@@ -39,6 +39,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 import time
 from typing import Any, Dict, List, Optional
@@ -186,6 +187,36 @@ class RoundMetrics:
 
 
 # ---------- 从 OpenAI 格式 message 中解析 tool_calls ----------
+def _parse_tool_arguments(args_str: str) -> dict:
+    """解析 function.arguments：先尝试 JSON，失败时对常见畸形（如 id 未加引号）做容错。"""
+    if not args_str or not isinstance(args_str, str):
+        return {}
+    s = args_str.strip()
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    # 容错：模型常返回 "id": /path/without/quotes，用正则提取
+    out = {}
+    # 匹配 "id": "value" 或 "id": value（value 为无引号字符串，到 , 或 } 为止）
+    m = re.search(r'"id"\s*:\s*"([^"]*)"', s)
+    if m:
+        out["id"] = m.group(1).strip()
+        return out
+    m = re.search(r'"id"\s*:\s*([^,}\]]+)', s)
+    if m:
+        out["id"] = m.group(1).strip()
+        return out
+    # 匹配 "query": "value"
+    m = re.search(r'"query"\s*:\s*"([^"]*)"', s)
+    if m:
+        out["query"] = m.group(1).strip()
+    m = re.search(r'"query"\s*:\s*([^,}\]]+)', s)
+    if m:
+        out["query"] = m.group(1).strip()
+    return out if out else {}
+
+
 def extract_tool_calls_from_message(message: dict) -> List[dict]:
     """OpenAI 格式: message.tool_calls = [{ id, type, function: { name, arguments } }]"""
     raw = message.get("tool_calls") or []
@@ -197,10 +228,9 @@ def extract_tool_calls_from_message(message: dict) -> List[dict]:
         name = fn.get("name") or tc.get("name")
         args = fn.get("arguments")
         if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except json.JSONDecodeError:
-                args = {}
+            args = _parse_tool_arguments(args)
+        elif args is None:
+            args = {}
         if not name:
             continue
         out.append({
@@ -374,10 +404,9 @@ async def run_one_deep_research(
                 fn = (tc.get("function") or {}).get("name") or ""
                 args = (tc.get("function") or {}).get("arguments") or {}
                 if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {}
+                    args = _parse_tool_arguments(args)
+                elif not isinstance(args, dict):
+                    args = {}
                 # browser.search / browser.open / browser.find
                 actual_name = fn.split(".")[-1] if "." in fn else fn
                 try:
