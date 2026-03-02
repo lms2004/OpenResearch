@@ -1,6 +1,8 @@
 #!/bin/bash
 # Quick start script for running agent with multiple vLLM servers
-# Usage: ./run_agent.sh [output_dir] [base_port] [num_servers] [dataset_name] [browser_backend] [model_path]
+# Usage: ./run_agent.sh [output_dir] [base_port] [num_servers] [dataset_name] [browser_backend] [model_path] [max_turns]
+#
+# max_turns: 每问最大轮次，默认 50；不传则使用 deploy_agent.py 默认值
 #
 # To reduce verbose logs and see progress bar clearly, redirect logs to file:
 #   bash run_agent.sh ... 2>&1 | tee output.log | grep -E "(Worker|%|it/s)" 
@@ -13,6 +15,7 @@ NUM_SERVERS=${3:-2}
 DATASET_NAME=${4:-"browsecomp-plus"}
 BROWSER_BACKEND=${5:-"local"}
 MODEL_INPUT=${6:-"OpenResearcher/OpenResearcher-30B-A3B"}
+MAX_TURNS=${7:-50}
 
 
 SEARCH_URL="http://localhost:8000"
@@ -82,6 +85,7 @@ done
 echo "Search Service: $SEARCH_URL"
 echo "Dataset: $DATASET_NAME"
 echo "Browser Backend: $BROWSER_BACKEND"
+echo "Max turns per question: $MAX_TURNS"
 echo "Output Directory: $OUTPUT_DIR"
 echo "=========================================="
 echo ""
@@ -111,6 +115,7 @@ if [ "$DATASET_NAME" = "browsecomp_plus" ]; then
         --browser_backend "$BROWSER_BACKEND" \
         --reasoning_effort high \
         --vllm_server_url "$SERVER_URLS" \
+        --max_turns "$MAX_TURNS" \
         --max_concurrency_per_worker 32
 else
     # HuggingFace datasets or OpenAI BrowseComp (no local data_path needed)
@@ -126,5 +131,6 @@ else
         --browser_backend "$BROWSER_BACKEND" \
         --reasoning_effort high \
         --vllm_server_url "$SERVER_URLS" \
+        --max_turns "$MAX_TURNS" \
         --max_concurrency_per_worker 32
 fi
