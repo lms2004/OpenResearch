@@ -689,8 +689,7 @@ class LLMJudge:
                 if on_result is not None:
                     on_result(result)
                 output.append(result)
-        return output
-    
+        return output    
     def _judge(self, data):
         question = data['question']
         # Handle both string and list formats for content
@@ -721,12 +720,22 @@ class LLMJudge:
                 response["gen_output"]=gen_output
                 response["correct_answer"]=answer
                 response["content"]=chat_completion.choices[0].message.content
+                # Token usage: support both OpenAI (prompt_tokens, completion_tokens) and Volc/others (input_tokens, output_tokens)
+                usage = getattr(chat_completion, 'usage', None)
+                if usage is not None:
+                    response["input_tokens"] = getattr(usage, 'input_tokens', None) or getattr(usage, 'prompt_tokens', 0)
+                    response["output_tokens"] = getattr(usage, 'output_tokens', None) or getattr(usage, 'completion_tokens', 0)
+                else:
+                    response["input_tokens"] = 0
+                    response["output_tokens"] = 0
                 return response
             except Exception as e:
                 if attempt == self.max_retries:
                     out = {"correct": False, "error": str(e)}
                     out["qid"] = data.get("qid")
                     out["trajectory_id"] = data.get("trajectory_id")
+                    out["input_tokens"] = 0
+                    out["output_tokens"] = 0
                     return out
                 backoff = 0.5 * (2 ** (attempt - 1)) + random.uniform(0, 0.2)
                 time.sleep(backoff)
@@ -800,7 +809,7 @@ if __name__ == '__main__':
     print(f"Error samples (skipped): {len(error_data)}")
 
     output_file = args.input_dir.rstrip('/') + '/evaluated.jsonl'
-    keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error"]
+    keys_to_remove = ["extracted_final_answer", "reasoning", "confidence", "parse_error", "input_tokens", "output_tokens"]
     timing_keys = ["latency_s", "num_rounds", "num_tool_calls", "started_at", "finished_at"]
     clean_by_tid = {d["trajectory_id"]: d for d in clean_data if d.get("trajectory_id")}
 
@@ -834,6 +843,9 @@ if __name__ == '__main__':
         print(f"Judging {len(to_judge)} trajectories (streaming to {output_file})...\n")
         judger = LLMJudge(llm=llm, base_url=base_url, max_workers=args.workers)
         write_lock = Lock()
+        token_lock = Lock()
+        token_totals = {"input": 0, "output": 0, "count": 0}
+        TOKEN_PRINT_INTERVAL = 500  # print token usage every N trajectories
 
         def on_result(item):
             saved_item = {k: v for k, v in item.items() if k not in keys_to_remove}
@@ -845,10 +857,24 @@ if __name__ == '__main__':
             with write_lock:
                 f_out.write(json.dumps(saved_item, ensure_ascii=False) + '\n')
                 f_out.flush()
+            # Accumulate token usage and print periodically
+            inp = item.get("input_tokens") or 0
+            out = item.get("output_tokens") or 0
+            with token_lock:
+                token_totals["input"] += inp
+                token_totals["output"] += out
+                token_totals["count"] += 1
+                n = token_totals["count"]
+            if n % TOKEN_PRINT_INTERVAL == 0 and n > 0:
+                print(f"  [Token usage] judged={n} | input_tokens={token_totals['input']} | output_tokens={token_totals['output']} | total={token_totals['input'] + token_totals['output']}")
 
         with open(output_file, 'a', encoding='utf-8') as f_out:
             judger.judge(to_judge, on_result=on_result)
         print(f"\nJudged {len(to_judge)} trajectories (results appended to file).")
+        with token_lock:
+            ti, to, cnt = token_totals["input"], token_totals["output"], token_totals["count"]
+        if cnt > 0:
+            print(f"\nToken usage (judge model): input_tokens={ti} | output_tokens={to} | total={ti + to} | trajectories={cnt}")
     else:
         print("Nothing new to judge; using existing evaluated.jsonl for summary.")
 
