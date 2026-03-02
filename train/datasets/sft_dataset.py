@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+from collections import defaultdict
 from pathlib import Path
 import sys
 
@@ -28,6 +29,7 @@ DEFAULT_MAX_TOKENS = 30000
 # 默认从通过筛选的样本中划分 5% 作为评估池（与训练集无交集），供 make_eval_turns.py 使用
 DEFAULT_EVAL_RATIO = 0.05
 DEFAULT_EVAL_SEED = 42
+DEFAULT_SAMPLE_SEED = 42
 
 
 def _normalize_args_id(obj):
@@ -132,10 +134,50 @@ def normalize_messages(raw_messages):
     return normalized
 
 
-def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DEFAULT_EVAL_SEED):
+def stratified_sample_by_turns(samples, max_samples: int, rng: random.Random):
+    """
+    按 message 轮次（len(messages)）分层抽样，使各轮次样本尽量均匀，总样本数不超过 max_samples。
+    返回抽样后的样本列表（新 list，不修改原 samples）。
+    """
+    n = len(samples)
+    if n <= max_samples:
+        return samples
+    indices_by_turn = defaultdict(list)
+    for i, s in enumerate(samples):
+        turn_count = len(s.get("messages") or [])
+        indices_by_turn[turn_count].append(i)
+    turn_counts = sorted(indices_by_turn.keys())
+    num_buckets = len(turn_counts)
+    per_bucket = max(1, max_samples // num_buckets)
+    sampled_indices = []
+    for tc in turn_counts:
+        bucket = indices_by_turn[tc]
+        k = min(per_bucket, len(bucket))
+        sampled_indices.extend(rng.sample(bucket, k))
+    # 若未满 max_samples，从剩余样本中随机补齐
+    if len(sampled_indices) < max_samples:
+        taken = set(sampled_indices)
+        remaining = [i for i in range(n) if i not in taken]
+        need = max_samples - len(sampled_indices)
+        add = rng.sample(remaining, min(need, len(remaining)))
+        sampled_indices.extend(add)
+    # 若因 per_bucket>=1 导致超过 max_samples，随机截断
+    if len(sampled_indices) > max_samples:
+        rng.shuffle(sampled_indices)
+        sampled_indices = sampled_indices[:max_samples]
+    return [samples[i] for i in sampled_indices]
+
+
+def convert(
+    max_tokens: int | None,
+    eval_ratio: float = 0.0,
+    eval_seed: int = DEFAULT_EVAL_SEED,
+    max_samples: int | None = None,
+    sample_seed: int = DEFAULT_SAMPLE_SEED,
+):
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # 1) 读取并过滤
+    # 1) 先按 token 数量筛选：读取并丢弃 num_generated_tokens > max_tokens 的轨迹
     samples = []
     with input_path.open("r", encoding="utf-8") as fin:
         for line in fin:
@@ -152,8 +194,16 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
     if n == 0:
         print("No samples after filtering, abort.")
         return
+    print(f"After token filter (max_tokens={max_tokens}): {n} samples.")
 
-    # 2) 划分 train / eval（固定 seed，保证可复现且评估集不与训练集重叠）
+    # 2) 再按样本量限制：在通过 token 筛选的样本上做分层抽样，总数不超过 max_samples
+    if max_samples is not None and max_samples > 0:
+        rng_sample = random.Random(sample_seed)
+        samples = stratified_sample_by_turns(samples, max_samples, rng_sample)
+        n = len(samples)
+        print(f"After stratified sampling (max_samples={max_samples}, sample_seed={sample_seed}): {n} samples.")
+
+    # 3) 划分 train / eval（固定 seed，保证可复现且评估集不与训练集重叠）
     rng = random.Random(eval_seed)
     indices = list(range(n))
     rng.shuffle(indices)
@@ -161,7 +211,7 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
     eval_indices = set(indices[:n_eval])
     train_indices = set(indices[n_eval:])
 
-    # 3) 写训练集 tools_sft.jsonl（仅 train 部分）
+    # 4) 写训练集 tools_sft.jsonl（仅 train 部分）
     n_train = 0
     with output_path.open("w", encoding="utf-8") as fout:
         for i in train_indices:
@@ -175,7 +225,7 @@ def convert(max_tokens: int | None, eval_ratio: float = 0.0, eval_seed: int = DE
             fout.write(json.dumps(out_obj, ensure_ascii=False) + "\n")
             n_train += 1
 
-    # 4) 写评估集：两份文件，列与训练集一致的一份给 train.py，带 num_generated_tokens 的一份给 make_eval_turns.py
+    # 5) 写评估集：两份文件
     if eval_indices:
         eval_sft_path.parent.mkdir(parents=True, exist_ok=True)
         # 4a) eval_sft.jsonl：仅 messages + tools，与训练集列一致，供 train.py --eval_jsonl
@@ -231,9 +281,27 @@ def main():
         default=DEFAULT_EVAL_SEED,
         help=f"Random seed for train/eval split (default: {DEFAULT_EVAL_SEED}).",
     )
+    parser.add_argument(
+        "--max-samples",
+        type=int,
+        default=None,
+        help="Max number of samples to use after filtering. Stratified sampling by message turn count is applied to keep turn distribution roughly uniform. Omit to use all filtered samples.",
+    )
+    parser.add_argument(
+        "--sample-seed",
+        type=int,
+        default=DEFAULT_SAMPLE_SEED,
+        help=f"Random seed for stratified sampling when --max-samples is set (default: {DEFAULT_SAMPLE_SEED}).",
+    )
     args = parser.parse_args()
     max_tokens = args.max_tokens if args.max_tokens > 0 else None
-    convert(max_tokens=max_tokens, eval_ratio=args.eval_ratio, eval_seed=args.eval_seed)
+    convert(
+        max_tokens=max_tokens,
+        eval_ratio=args.eval_ratio,
+        eval_seed=args.eval_seed,
+        max_samples=args.max_samples,
+        sample_seed=args.sample_seed,
+    )
 
 
 if __name__ == "__main__":

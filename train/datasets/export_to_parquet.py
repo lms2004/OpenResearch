@@ -10,6 +10,7 @@ from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from tqdm import tqdm
 
 
 def _seed_from_parquet_path(path: Path) -> str:
@@ -32,7 +33,7 @@ def load_trajectory_id_allowlist(path: Path) -> set[str]:
     """Load set of trajectory_id from JSONL (each line has key 'trajectory_id')."""
     allowlist: set[str] = set()
     with path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for line in tqdm(f, desc="Loading allowlist", unit=" lines"):
             line = line.strip()
             if not line:
                 continue
@@ -107,7 +108,7 @@ def main() -> None:
     by_seed: dict[str, list[dict[str, Any]]] = {}
     labels: list[dict[str, Any]] = []
 
-    for path in parquet_paths:
+    for path in tqdm(parquet_paths, desc="Scanning parquet", unit=" files"):
         seed_str = _seed_from_parquet_path(path)
         pf = pq.ParquetFile(path)
         for batch in pf.iter_batches(batch_size=args.batch_size):
@@ -132,7 +133,9 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    for seed_str, rows in by_seed.items():
+    for seed_str, rows in tqdm(
+        by_seed.items(), desc="Writing parquet", unit=" seeds"
+    ):
         out_seed_dir = args.output_dir / seed_str
         out_seed_dir.mkdir(parents=True, exist_ok=True)
         table = pa.Table.from_pylist(rows)

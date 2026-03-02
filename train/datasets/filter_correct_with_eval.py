@@ -5,7 +5,27 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
+
+from tqdm import tqdm
+
+
+def _line_count(path: Path) -> int:
+    """Return number of lines in file using wc -l (faster than Python iteration)."""
+    try:
+        result = subprocess.run(
+            ["wc", "-l", str(path)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            return 0
+        parts = result.stdout.strip().split()
+        return int(parts[0]) if parts else 0
+    except Exception:
+        return 0
 
 
 def main() -> None:
@@ -38,7 +58,7 @@ def main() -> None:
 
     correct_trajectory_ids: set[str] = set()
     with evaluated_path.open("r", encoding="utf-8") as f:
-        for line in f:
+        for line in tqdm(f, desc="Loading evaluated.jsonl", unit=" lines"):
             line = line.strip()
             if not line:
                 continue
@@ -49,11 +69,18 @@ def main() -> None:
     print(f"Correct trajectory IDs: {len(correct_trajectory_ids)}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    total_lines = _line_count(args.input)
     kept = 0
     with args.input.open("r", encoding="utf-8") as fin, args.output.open(
         "w", encoding="utf-8"
     ) as fout:
-        for line in fin:
+        pbar = tqdm(
+            fin,
+            total=total_lines,
+            desc="Filtering input",
+            unit=" lines",
+        )
+        for line in pbar:
             line = line.strip()
             if not line:
                 continue
@@ -62,6 +89,7 @@ def main() -> None:
             if tid in correct_trajectory_ids:
                 fout.write(line + "\n")
                 kept += 1
+        pbar.close()
 
     print(f"Kept {kept} records -> {args.output}")
 
