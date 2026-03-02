@@ -663,7 +663,7 @@ class LLMJudge:
         output = []
         with ThreadPoolExecutor(max_workers=self.max_workers) as ex:
             futures = [ex.submit(self._judge, d) for d in data]
-            for f in tqdm(as_completed(futures), total=len(futures)):
+            for f in tqdm(as_completed(futures), total=len(futures), desc="Judging", unit=" traj"):
                 output.append(f.result())
         return output
     
@@ -733,10 +733,25 @@ if __name__ == '__main__':
 
     data = []
     for file in sorted(files):
-        lines = open(file, encoding='utf-8').readlines()
-        n = sum(1 for line in lines if line.strip())
-        data.extend([json.loads(line) for line in lines if line.strip()])
-        print(f"  Loaded: {os.path.basename(file)} -> {n} lines")
+        fname = os.path.basename(file)
+        # First pass: count lines (streaming) for progress bar total
+        with open(file, encoding='utf-8') as f:
+            total_lines = sum(1 for line in f if line.strip())
+        n = 0
+        with open(file, encoding='utf-8') as f:
+            pbar = tqdm(total=total_lines, desc=f"Loading {fname}", unit=" lines")
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                pbar.update(1)
+                try:
+                    data.append(json.loads(line))
+                    n += 1
+                except json.JSONDecodeError:
+                    pass
+            pbar.close()
+        print(f"  Loaded: {fname} -> {n} lines")
     # Evaluate by trajectory: duplicate qid allowed; trajectory_id distinguishes trajectories
     assert len(data) > 0, "No data to evaluate"
     clean_data = []
