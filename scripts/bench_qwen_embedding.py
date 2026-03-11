@@ -58,7 +58,7 @@ def load_corpus_texts(parquet_path: str, max_docs: int | None) -> List[Tuple[str
     """从 parquet 语料中加载 (docid, text) 列表，与 backend.Corpus 使用的 schema 一致。"""
     if not parquet_path.strip():
         raise ValueError("corpus_parquet_path is required")
-    con = duckdb.connect(database=":memory:", read_only=True)
+    con = duckdb.connect(database=":memory:", read_only=False)
     # read_parquet 支持 glob
     query = f"SELECT docid, text FROM read_parquet('{parquet_path}')"
     if max_docs is not None:
