@@ -206,7 +206,7 @@ def main():
         "--max_docs",
         type=int,
         default=2000,
-        help="最多参与 benchmark 的文档数（默认 2000）",
+        help="最多参与 benchmark 的文档数（默认 2000）；传 0 表示全量不限制",
     )
     parser.add_argument(
         "--batch_size",
@@ -249,7 +249,8 @@ def main():
         corpus_path = os.path.join(_project_root, corpus_path)
 
     print("Loading corpus...")
-    docid_texts = load_corpus_texts(corpus_path, args.max_docs)
+    max_docs_arg = None if args.max_docs == 0 else args.max_docs
+    docid_texts = load_corpus_texts(corpus_path, max_docs_arg)
     if not docid_texts:
         print("No documents found. Check corpus path and max_docs.")
         sys.exit(1)

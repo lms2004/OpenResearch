@@ -3,7 +3,8 @@
 # 前提：已在本机部署 embedding 服务，例如: bash scripts/start_embed_service.sh 8010
 #
 # 用法: bash scripts/run_embed_bench.sh [max_docs] [port]
-# 示例: bash scripts/run_embed_bench.sh
+# 示例: bash scripts/run_embed_bench.sh           # 默认 2000 条
+#       bash scripts/run_embed_bench.sh 0         # 全量
 #       bash scripts/run_embed_bench.sh 2000 8010
 #
 set -e
@@ -43,7 +44,7 @@ if ! curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/v1/models"
     exit 1
 fi
 
-echo -e "${GREEN}从语料生成向量 (max_docs=$MAX_DOCS, embed_url=$EMBED_URL)...${NC}"
+echo -e "${GREEN}从语料生成向量 (max_docs=$([ "$MAX_DOCS" = "0" ] && echo "全量" || echo "$MAX_DOCS"), embed_url=$EMBED_URL)...${NC}"
 echo ""
 
 python scripts/bench_qwen_embedding.py \
