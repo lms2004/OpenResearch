@@ -44,10 +44,44 @@ fi
 echo -e "${GREEN}从语料生成向量 (max_docs=$([ "$MAX_DOCS" = "0" ] && echo "全量" || echo "$MAX_DOCS"), embed_url=$EMBED_URL)...${NC}"
 echo ""
 
+# 显式传入模型名：优先使用用户传入的 --model；否则用 DENSE_MODEL_NAME；再否则从服务 /v1/models 自动探测
+MODEL_ARG=()
+if printf '%s\n' "$@" | grep -q -- '^--model$'; then
+    MODEL_ARG=()
+else
+    MODEL_NAME="${DENSE_MODEL_NAME:-}"
+    if [ -z "$MODEL_NAME" ]; then
+        MODEL_NAME="$(python - <<'PY'
+import json
+import os
+import sys
+import urllib.request
+
+base = os.environ.get("EMBED_URL", "http://localhost:8010/v1").rstrip("/")
+url = base + "/models"
+try:
+    with urllib.request.urlopen(url, timeout=3) as r:
+        data = json.loads(r.read().decode("utf-8"))
+    models = data.get("data") or []
+    if models and isinstance(models, list) and isinstance(models[0], dict):
+        mid = models[0].get("id")
+        if mid:
+            print(mid)
+            sys.exit(0)
+except Exception:
+    pass
+print("Qwen/Qwen3-Embedding-8B")
+PY
+)"
+    fi
+    MODEL_ARG=(--model "$MODEL_NAME")
+fi
+
 python scripts/bench_qwen_embedding.py \
     --max_docs "$MAX_DOCS" \
     --embed_url "$EMBED_URL" \
     --corpus_parquet "$CORPUS_PATTERN" \
+    "${MODEL_ARG[@]}" \
     "$@"
 
 echo ""
