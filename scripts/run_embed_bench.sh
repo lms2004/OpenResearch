@@ -40,13 +40,7 @@ if ! ls $CORPUS_ABS_GLOB 1>/dev/null 2>&1; then
     exit 1
 fi
 
-# 可选：检查服务是否可达（避免跑很久再报错）
-if ! curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/v1/models" 2>/dev/null | grep -q "200"; then
-    echo -e "${RED}Error: Embedding 服务未就绪 (localhost:${PORT})${NC}"
-    echo "请先部署: bash scripts/start_embed_service.sh ${PORT}"
-    exit 1
-fi
-
+# 先加载语料（在 Python 中），再在发起请求时检查服务；不在此处提前 curl 检查
 echo -e "${GREEN}从语料生成向量 (max_docs=$([ "$MAX_DOCS" = "0" ] && echo "全量" || echo "$MAX_DOCS"), embed_url=$EMBED_URL)...${NC}"
 echo ""
 
