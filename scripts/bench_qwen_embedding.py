@@ -147,11 +147,14 @@ async def request_embeddings(
     model: str,
     texts: List[str],
     max_text_len: int,
+    dimensions: int | None = None,
 ) -> List[List[float]]:
     """单次请求：对一批文本请求 /v1/embeddings，返回 list of embedding vectors。"""
     truncated = [truncate_text(t, max_text_len) for t in texts]
     url = base_url.rstrip("/") + "/embeddings"
     payload = {"model": model, "input": truncated}
+    if dimensions is not None and int(dimensions) > 0:
+        payload["dimensions"] = int(dimensions)
     resp = await client.post(url, json=payload, timeout=120.0)
     resp.raise_for_status()
     data = resp.json()
@@ -169,6 +172,7 @@ async def run_benchmark(
     batch_size: int,
     concurrency: int,
     max_text_len: int,
+    dimensions: int | None,
     save_path: str | None,
     progress: bool = True,
 ) -> dict:
@@ -188,7 +192,14 @@ async def run_benchmark(
                 return []
             texts = [t for _, t in batch]
             async with httpx.AsyncClient() as client:
-                vecs = await request_embeddings(client, base_url, model, texts, max_text_len)
+                vecs = await request_embeddings(
+                    client,
+                    base_url,
+                    model,
+                    texts,
+                    max_text_len,
+                    dimensions=dimensions,
+                )
             if pbar:
                 pbar.update(len(batch))
             return [(start, vecs)]
@@ -225,6 +236,7 @@ async def run_benchmark(
         "vectors_per_sec": round(num_vectors / elapsed, 4) if elapsed > 0 else 0,
         "batch_size": batch_size,
         "concurrency": concurrency,
+        "dimensions": dimensions or 0,
     }
 
     if save_path:
@@ -294,6 +306,12 @@ def main():
         help="单条文本最大字符数，与 DenseSearcher max_length 对齐（默认 8192）",
     )
     parser.add_argument(
+        "--dimensions",
+        type=int,
+        default=int(os.getenv("EMBED_DIMENSIONS", "0")),
+        help="可选：请求返回的 embedding 维度（需要模型支持 matryoshka）。默认 0=不指定",
+    )
+    parser.add_argument(
         "--save_vectors",
         type=str,
         default=None,
@@ -346,6 +364,7 @@ def main():
                 batch_size=args.batch_size,
                 concurrency=args.concurrency,
                 max_text_len=args.max_text_len,
+                dimensions=(None if int(args.dimensions) <= 0 else int(args.dimensions)),
                 save_path=args.save_vectors,
                 progress=not args.no_progress,
             )

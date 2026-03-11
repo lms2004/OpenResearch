@@ -46,7 +46,7 @@ echo ""
 
 # 显式传入模型名：优先使用用户传入的 --model；否则用 DENSE_MODEL_NAME；再否则从服务 /v1/models 自动探测
 MODEL_ARG=()
-if printf '%s\n' "$@" | grep -q -- '^--model$'; then
+if printf '%s\n' "$@" | grep -Eq -- '^(--model$|--model=)'; then
     MODEL_ARG=()
 else
     MODEL_NAME="${DENSE_MODEL_NAME:-}"
@@ -77,11 +77,22 @@ PY
     MODEL_ARG=(--model "$MODEL_NAME")
 fi
 
+# 显式传入维度：优先使用用户传入的 --dimensions；否则用 EMBED_DIMENSIONS
+DIM_ARG=()
+if printf '%s\n' "$@" | grep -Eq -- '^(--dimensions$|--dimensions=)'; then
+    DIM_ARG=()
+else
+    if [ -n "${EMBED_DIMENSIONS:-}" ]; then
+        DIM_ARG=(--dimensions "${EMBED_DIMENSIONS}")
+    fi
+fi
+
 python scripts/bench_qwen_embedding.py \
     --max_docs "$MAX_DOCS" \
     --embed_url "$EMBED_URL" \
     --corpus_parquet "$CORPUS_PATTERN" \
     "${MODEL_ARG[@]}" \
+    "${DIM_ARG[@]}" \
     "$@"
 
 echo ""
