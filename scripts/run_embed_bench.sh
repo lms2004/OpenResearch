@@ -2,10 +2,11 @@
 # 请求生成 embedding：从原始语料读取文档，向已部署的 embedding 服务请求生成向量，带进度条并输出速度。
 # 前提：已在本机部署 embedding 服务，例如: bash scripts/start_embed_service.sh 8010
 #
-# 用法: bash scripts/run_embed_bench.sh [max_docs] [port]
-# 示例: bash scripts/run_embed_bench.sh           # 默认 2000 条
-#       bash scripts/run_embed_bench.sh 0         # 全量
-#       bash scripts/run_embed_bench.sh 2000 8010
+# 用法: bash scripts/run_embed_bench.sh [max_docs] [port] [--concurrency N] [--batch_size N] [--save_vectors PATH] ...
+# 示例: bash scripts/run_embed_bench.sh              # 默认 2000 条
+#       bash scripts/run_embed_bench.sh 0            # 全量
+#       bash scripts/run_embed_bench.sh 0 8010 --concurrency 8 --batch_size 64
+#       bash scripts/run_embed_bench.sh 0 8010 --save_vectors results/embeddings.npy
 #
 set -e
 
@@ -13,8 +14,10 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-MAX_DOCS="${1:-2000}"
+MAX_DOCS="${1:-0}"
 PORT="${2:-8010}"
+# 消费前两个位置参数，避免把 0 或 port 当作额外参数传给 Python
+if [ $# -ge 2 ]; then shift 2; elif [ $# -ge 1 ]; then shift; fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
