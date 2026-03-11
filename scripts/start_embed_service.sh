@@ -1,9 +1,11 @@
 #!/bin/bash
-# 启动 vLLM Qwen3-Embedding-8B 服务，供 bench_qwen_embedding.py 调用。
+# 部署 vLLM Qwen3-Embedding-8B 模型服务（仅启动服务，不生成向量）。
 # 与 scripts/start_search_service.sh dense 使用同一模型（Qwen/Qwen3-Embedding-8B）。
-# Usage: ./scripts/start_embed_service.sh [port] [CUDA_VISIBLE_DEVICES]
-# Example: ./scripts/start_embed_service.sh 8010 0,1
-
+#
+# 用法: bash scripts/start_embed_service.sh [port] [CUDA_VISIBLE_DEVICES]
+# 示例: bash scripts/start_embed_service.sh 8010 0,1
+#
+# 部署后，在另一终端运行生成向量: bash scripts/run_embed_bench.sh
 set -e
 
 RED='\033[0;31m'
@@ -35,13 +37,13 @@ echo "Model: ${DENSE_MODEL_NAME}"
 echo "Port: ${PORT}"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}"
 echo ""
-echo "Benchmark with: python scripts/bench_qwen_embedding.py --embed_url http://localhost:${PORT}/v1"
+echo "生成向量请另开终端运行: bash scripts/run_embed_bench.sh"
 echo -e "${GREEN}================================${NC}"
 echo ""
 
-# vLLM 0.13+ 支持 --task embed 启动 embedding 模型（与 deploy_vllm_service.py 一样用 vllm serve）
+# vLLM 用 --runner pooling 启动 embedding 模型（与 deploy_vllm_service.py 一致）
 exec vllm serve "${DENSE_MODEL_NAME}" \
-    --task embed \
+    --runner pooling \
     --host 0.0.0.0 \
     --port "${PORT}" \
     --trust-remote-code

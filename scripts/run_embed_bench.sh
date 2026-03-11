@@ -1,18 +1,19 @@
 #!/bin/bash
-# 一键：启动 embedding 服务（若未运行）→ 从原始语料生成向量 + 进度条 + 输出生成速度
-# Usage: ./scripts/run_embed_bench.sh [max_docs] [port] [cuda_devices]
-# Example: ./scripts/run_embed_bench.sh 2000 8010 0
-
+# 请求生成 embedding：从原始语料读取文档，向已部署的 embedding 服务请求生成向量，带进度条并输出速度。
+# 前提：已在本机部署 embedding 服务，例如: bash scripts/start_embed_service.sh 8010
+#
+# 用法: bash scripts/run_embed_bench.sh [max_docs] [port]
+# 示例: bash scripts/run_embed_bench.sh
+#       bash scripts/run_embed_bench.sh 2000 8010
+#
 set -e
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 NC='\033[0m'
 
 MAX_DOCS="${1:-2000}"
 PORT="${2:-8010}"
-CUDA_DEVICES="${3:-0}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -25,10 +26,8 @@ fi
 
 source .venv/bin/activate
 
-export CUDA_VISIBLE_DEVICES="$CUDA_DEVICES"
 export EMBED_URL="http://localhost:${PORT}/v1"
 
-# 检查语料是否存在
 CORPUS_PATTERN="Tevatron/browsecomp-plus-corpus/data/*.parquet"
 CORPUS_ABS_GLOB="${PROJECT_ROOT}/${CORPUS_PATTERN}"
 if ! ls $CORPUS_ABS_GLOB 1>/dev/null 2>&1; then
@@ -37,55 +36,21 @@ if ! ls $CORPUS_ABS_GLOB 1>/dev/null 2>&1; then
     exit 1
 fi
 
-# 检查 embedding 服务是否已在运行
-wait_for_server() {
-    local url="$1"
-    local max_attempts="${2:-60}"
-    local attempt=1
-    while [ $attempt -le $max_attempts ]; do
-        if curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null | grep -q "200"; then
-            return 0
-        fi
-        sleep 2
-        attempt=$((attempt + 1))
-    done
-    return 1
-}
-
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}  一键：原始文档 → 向量 + 速度统计 + 进度条${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo "  max_docs: $MAX_DOCS"
-echo "  embed port: $PORT"
-echo "  CUDA_VISIBLE_DEVICES: $CUDA_DEVICES"
-echo ""
-
-if wait_for_server "http://localhost:${PORT}/v1/models" 3 2>/dev/null; then
-    echo -e "${YELLOW}Embedding 服务已在 localhost:${PORT} 运行，直接跑 benchmark。${NC}"
-else
-    echo -e "${YELLOW}正在后台启动 vLLM Embedding 服务 (port=${PORT})...${NC}"
-    mkdir -p "$PROJECT_ROOT/logs"
-    LOG_FILE="$PROJECT_ROOT/logs/embed_server_${PORT}.log"
-    nohup bash "$SCRIPT_DIR/start_embed_service.sh" "$PORT" "$CUDA_DEVICES" > "$LOG_FILE" 2>&1 &
-    EMBED_PID=$!
-    echo "  Server PID: $EMBED_PID, log: $LOG_FILE"
-    echo "  等待服务就绪..."
-    if ! wait_for_server "http://localhost:${PORT}/v1/models" 120; then
-        echo -e "${RED}Error: Embedding 服务启动超时。查看日志: $LOG_FILE${NC}"
-        kill $EMBED_PID 2>/dev/null || true
-        exit 1
-    fi
-    echo -e "${GREEN}  Embedding 服务已就绪。${NC}"
+# 可选：检查服务是否可达（避免跑很久再报错）
+if ! curl -s -o /dev/null -w "%{http_code}" "http://localhost:${PORT}/v1/models" 2>/dev/null | grep -q "200"; then
+    echo -e "${RED}Error: Embedding 服务未就绪 (localhost:${PORT})${NC}"
+    echo "请先部署: bash scripts/start_embed_service.sh ${PORT}"
+    exit 1
 fi
 
-echo ""
-echo -e "${GREEN}开始从语料生成向量（带进度条）...${NC}"
+echo -e "${GREEN}从语料生成向量 (max_docs=$MAX_DOCS, embed_url=$EMBED_URL)...${NC}"
 echo ""
 
 python scripts/bench_qwen_embedding.py \
     --max_docs "$MAX_DOCS" \
     --embed_url "$EMBED_URL" \
-    --corpus_parquet "$CORPUS_PATTERN"
+    --corpus_parquet "$CORPUS_PATTERN" \
+    "$@"
 
 echo ""
 echo -e "${GREEN}完成。${NC}"

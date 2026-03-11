@@ -3,23 +3,19 @@
 """
 Qwen-Embedding 向量生成速度基准脚本。
 
-从与当前检索服务（dense）对应的索引所使用的原始语料中读取文档，通过 vLLM 部署的
-Qwen3-Embedding-8B 模型并发批量生成向量，统计耗时与吞吐（文档/秒、向量/秒等）。
+从语料读取文档，向已部署的 vLLM embedding 服务请求生成向量，统计耗时与吞吐（文档/秒、向量/秒等）。
 
-前置：需先启动 vLLM embedding 服务（与 scripts/start_search_service.sh dense 使用同一模型）：
-  bash scripts/start_embed_service.sh 8010
-  或手动：vllm serve Qwen/Qwen3-Embedding-8B --task embed --port 8010 --trust-remote-code
+两个脚本分工：
+  1. 部署服务: bash scripts/start_embed_service.sh [port] [cuda_devices]
+  2. 生成向量: bash scripts/run_embed_bench.sh [max_docs] [port]
+  或直接: python scripts/bench_qwen_embedding.py --embed_url http://localhost:8010/v1 ...
 
 Usage:
-  # 使用默认语料（CORPUS_PARQUET_PATH）与默认 embedding 服务地址，最多 2000 条，batch=32，并发 4
+  # 使用默认语料与默认 embedding 服务地址
   python scripts/bench_qwen_embedding.py
 
-  # 指定语料路径、服务地址、最大文档数、batch 与并发
-  python scripts/bench_qwen_embedding.py --corpus_parquet "Tevatron/browsecomp-plus-corpus/data/*.parquet" \\
-    --embed_url http://localhost:8010/v1 --max_docs 5000 --batch_size 64 --concurrency 8
-
-  # 将生成的向量保存到文件（用于复现或比对）
-  python scripts/bench_qwen_embedding.py --max_docs 1000 --save_vectors results/embeddings.npy
+  # 指定参数、保存向量
+  python scripts/bench_qwen_embedding.py --max_docs 5000 --save_vectors results/embeddings.npy
 """
 from __future__ import annotations
 
@@ -259,18 +255,23 @@ def main():
         sys.exit(1)
     print(f"Loaded {len(docid_texts)} documents. Running benchmark (batch_size={args.batch_size}, concurrency={args.concurrency})...")
 
-    stats = asyncio.run(
-        run_benchmark(
-            base_url=args.embed_url,
-            model=args.model,
-            docid_texts=docid_texts,
-            batch_size=args.batch_size,
-            concurrency=args.concurrency,
-            max_text_len=args.max_text_len,
-            save_path=args.save_vectors,
-            progress=not args.no_progress,
+    try:
+        stats = asyncio.run(
+            run_benchmark(
+                base_url=args.embed_url,
+                model=args.model,
+                docid_texts=docid_texts,
+                batch_size=args.batch_size,
+                concurrency=args.concurrency,
+                max_text_len=args.max_text_len,
+                save_path=args.save_vectors,
+                progress=not args.no_progress,
+            )
         )
-    )
+    except httpx.ConnectError as e:
+        print(f"\n连接失败: {e}")
+        print("提示: 请先部署 embedding 服务: bash scripts/start_embed_service.sh 8010")
+        sys.exit(1)
 
     print("\n========== Qwen-Embedding 向量生成速度 ==========")
     print(f"  文档总数:     {stats['total_docs']}")
