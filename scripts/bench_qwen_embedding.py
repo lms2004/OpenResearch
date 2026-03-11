@@ -268,7 +268,8 @@ def main():
             concurrency=args.concurrency,
             max_text_len=args.max_text_len,
             save_path=args.save_vectors,
-        progress=not args.no_progress,
+            progress=not args.no_progress,
+        )
     )
 
     print("\n========== Qwen-Embedding 向量生成速度 ==========")
