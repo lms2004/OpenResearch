@@ -1,0 +1,287 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+Qwen-Embedding 向量生成速度基准脚本。
+
+从与当前检索服务（dense）对应的索引所使用的原始语料中读取文档，通过 vLLM 部署的
+Qwen3-Embedding-8B 模型并发批量生成向量，统计耗时与吞吐（文档/秒、向量/秒等）。
+
+前置：需先启动 vLLM embedding 服务（与 scripts/start_search_service.sh dense 使用同一模型）：
+  bash scripts/start_embed_service.sh 8010
+  或手动：vllm serve Qwen/Qwen3-Embedding-8B --task embed --port 8010 --trust-remote-code
+
+Usage:
+  # 使用默认语料（CORPUS_PARQUET_PATH）与默认 embedding 服务地址，最多 2000 条，batch=32，并发 4
+  python scripts/bench_qwen_embedding.py
+
+  # 指定语料路径、服务地址、最大文档数、batch 与并发
+  python scripts/bench_qwen_embedding.py --corpus_parquet "Tevatron/browsecomp-plus-corpus/data/*.parquet" \\
+    --embed_url http://localhost:8010/v1 --max_docs 5000 --batch_size 64 --concurrency 8
+
+  # 将生成的向量保存到文件（用于复现或比对）
+  python scripts/bench_qwen_embedding.py --max_docs 1000 --save_vectors results/embeddings.npy
+"""
+from __future__ import annotations
+
+import argparse
+import asyncio
+import os
+import sys
+import time
+from typing import List, Tuple
+
+try:
+    import httpx
+except ImportError:
+    print("Please install: pip install httpx")
+    sys.exit(1)
+
+try:
+    import duckdb
+except ImportError:
+    print("Please install: pip install duckdb")
+    sys.exit(1)
+
+try:
+    from tqdm import tqdm
+except ImportError:
+    tqdm = None
+
+# 从项目根目录导入
+_script_dir = os.path.dirname(os.path.abspath(__file__))
+_project_root = os.path.dirname(_script_dir)
+sys.path.insert(0, _project_root)
+os.chdir(_project_root)
+
+
+def load_corpus_texts(parquet_path: str, max_docs: int | None) -> List[Tuple[str, str]]:
+    """从 parquet 语料中加载 (docid, text) 列表，与 backend.Corpus 使用的 schema 一致。"""
+    if not parquet_path.strip():
+        raise ValueError("corpus_parquet_path is required")
+    con = duckdb.connect(database=":memory:", read_only=True)
+    # read_parquet 支持 glob
+    query = f"SELECT docid, text FROM read_parquet('{parquet_path}')"
+    if max_docs is not None:
+        query += f" LIMIT {int(max_docs)}"
+    rows = con.execute(query).fetchall()
+    con.close()
+    return [(str(docid), (text or "").strip()) for docid, text in rows]
+
+
+def truncate_text(text: str, max_length: int) -> str:
+    """简单按字符截断；若需按 token 截断可接 tokenizer。"""
+    if max_length <= 0 or len(text) <= max_length:
+        return text
+    return text[:max_length]
+
+
+async def request_embeddings(
+    client: httpx.AsyncClient,
+    base_url: str,
+    model: str,
+    texts: List[str],
+    max_text_len: int,
+) -> List[List[float]]:
+    """单次请求：对一批文本请求 /v1/embeddings，返回 list of embedding vectors。"""
+    truncated = [truncate_text(t, max_text_len) for t in texts]
+    url = base_url.rstrip("/") + "/embeddings"
+    payload = {"model": model, "input": truncated}
+    resp = await client.post(url, json=payload, timeout=120.0)
+    resp.raise_for_status()
+    data = resp.json()
+    # OpenAI 格式: data["data"] = [ {"object":"embedding","embedding":[...], "index":0}, ... ]
+    out = []
+    for item in sorted(data.get("data", []), key=lambda x: x.get("index", 0)):
+        out.append(item["embedding"])
+    return out
+
+
+async def run_benchmark(
+    base_url: str,
+    model: str,
+    docid_texts: List[Tuple[str, str]],
+    batch_size: int,
+    concurrency: int,
+    max_text_len: int,
+    save_path: str | None,
+    progress: bool = True,
+) -> dict:
+    """并发批量请求 embedding，统计耗时与吞吐，可选保存向量。"""
+    total_docs = len(docid_texts)
+    all_embeddings: List[List[float]] = []
+    all_docids: List[str] = []
+    batch_starts = list(range(0, total_docs, batch_size))
+    pbar = tqdm(total=total_docs, desc="生成向量", unit="doc", disable=not progress) if tqdm else None
+
+    sem = asyncio.Semaphore(concurrency)
+
+    async def do_batch(start: int) -> List[Tuple[int, List[List[float]]]]:
+        async with sem:
+            batch = docid_texts[start : start + batch_size]
+            if not batch:
+                return []
+            texts = [t for _, t in batch]
+            async with httpx.AsyncClient() as client:
+                vecs = await request_embeddings(client, base_url, model, texts, max_text_len)
+            if pbar:
+                pbar.update(len(batch))
+            return [(start, vecs)]
+
+    start_time = time.perf_counter()
+    tasks = [do_batch(i) for i in batch_starts]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    if pbar:
+        pbar.close()
+
+    # 按起始下标排序以保证与 docid_texts 顺序一致
+    ordered: List[Tuple[int, List[List[float]]]] = []
+    for r in results:
+        if isinstance(r, Exception):
+            raise r
+        for item in r:
+            ordered.append(item)
+    ordered.sort(key=lambda x: x[0])
+
+    for idx, vecs in ordered:
+        all_embeddings.extend(vecs)
+        for j in range(idx, min(idx + len(vecs), total_docs)):
+            all_docids.append(docid_texts[j][0])
+
+    elapsed = time.perf_counter() - start_time
+    num_vectors = len(all_embeddings)
+
+    stats = {
+        "total_docs": total_docs,
+        "num_vectors": num_vectors,
+        "elapsed_sec": round(elapsed, 4),
+        "docs_per_sec": round(total_docs / elapsed, 4) if elapsed > 0 else 0,
+        "vectors_per_sec": round(num_vectors / elapsed, 4) if elapsed > 0 else 0,
+        "batch_size": batch_size,
+        "concurrency": concurrency,
+    }
+
+    if save_path:
+        os.makedirs(os.path.dirname(os.path.abspath(save_path)) or ".", exist_ok=True)
+        import numpy as np
+        arr = np.array(all_embeddings, dtype=np.float32)
+        np.save(save_path, arr)
+        stats["saved_vectors_path"] = save_path
+        # 可选：同时保存 docid 列表便于对齐
+        meta_path = save_path.rsplit(".", 1)[0] + "_docids.txt"
+        with open(meta_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(all_docids))
+        stats["saved_docids_path"] = meta_path
+
+    return stats
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Benchmark Qwen-Embedding vector generation speed via vLLM /v1/embeddings",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument(
+        "--corpus_parquet",
+        type=str,
+        default=os.getenv(
+            "CORPUS_PARQUET_PATH",
+            os.path.join(
+                os.path.dirname(_script_dir),
+                "Tevatron/browsecomp-plus-corpus/data/*.parquet",
+            ),
+        ),
+        help="Parquet 语料路径（支持 glob），与 start_search_service.sh dense 使用的 CORPUS_PARQUET_PATH 一致",
+    )
+    parser.add_argument(
+        "--embed_url",
+        type=str,
+        default=os.getenv("EMBED_URL", "http://localhost:8010/v1"),
+        help="vLLM embedding 服务 base URL（默认 8010 避免与检索服务 8000 冲突）",
+    )
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=os.getenv("DENSE_MODEL_NAME", "Qwen/Qwen3-Embedding-8B"),
+        help="Embedding 模型名，需与 vLLM 启动时 --model 一致",
+    )
+    parser.add_argument(
+        "--max_docs",
+        type=int,
+        default=2000,
+        help="最多参与 benchmark 的文档数（默认 2000）",
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="每批请求的文档数（默认 32）",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=4,
+        help="并发请求数（默认 4）",
+    )
+    parser.add_argument(
+        "--max_text_len",
+        type=int,
+        default=8192,
+        help="单条文本最大字符数，与 DenseSearcher max_length 对齐（默认 8192）",
+    )
+    parser.add_argument(
+        "--save_vectors",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="将生成的向量保存为 .npy 文件，并同时保存 docids 到同名 _docids.txt",
+    )
+    parser.add_argument(
+        "--no_progress",
+        action="store_true",
+        help="禁用进度条",
+    )
+    args = parser.parse_args()
+
+    if not args.corpus_parquet or not args.corpus_parquet.strip():
+        parser.error("请提供 --corpus_parquet 或设置环境变量 CORPUS_PARQUET_PATH")
+
+    # 解析相对路径为相对项目根
+    corpus_path = args.corpus_parquet
+    if not os.path.isabs(corpus_path):
+        corpus_path = os.path.join(_project_root, corpus_path)
+
+    print("Loading corpus...")
+    docid_texts = load_corpus_texts(corpus_path, args.max_docs)
+    if not docid_texts:
+        print("No documents found. Check corpus path and max_docs.")
+        sys.exit(1)
+    print(f"Loaded {len(docid_texts)} documents. Running benchmark (batch_size={args.batch_size}, concurrency={args.concurrency})...")
+
+    stats = asyncio.run(
+        run_benchmark(
+            base_url=args.embed_url,
+            model=args.model,
+            docid_texts=docid_texts,
+            batch_size=args.batch_size,
+            concurrency=args.concurrency,
+            max_text_len=args.max_text_len,
+            save_path=args.save_vectors,
+        progress=not args.no_progress,
+    )
+
+    print("\n========== Qwen-Embedding 向量生成速度 ==========")
+    print(f"  文档总数:     {stats['total_docs']}")
+    print(f"  向量总数:     {stats['num_vectors']}")
+    print(f"  总耗时(s):    {stats['elapsed_sec']}")
+    print(f"  文档/秒:      {stats['docs_per_sec']}")
+    print(f"  向量/秒:      {stats['vectors_per_sec']}")
+    if stats.get("saved_vectors_path"):
+        print(f"  向量已保存:   {stats['saved_vectors_path']}")
+        print(f"  docids 保存: {stats.get('saved_docids_path', '')}")
+    print("================================================\n")
+
+
+if __name__ == "__main__":
+    main()

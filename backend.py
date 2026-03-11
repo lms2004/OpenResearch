@@ -195,6 +195,36 @@ class DenseSearcher(BaseSearcher):
             for score, idx in zip(scores[0], indices[0])
         ]
 
+    def encode_documents(self, texts: List[str]) -> np.ndarray:
+        """Encode a list of document texts into vectors (no instruction prefix; for indexing)."""
+        if not self.model_pool or not self.tokenizer:
+            raise RuntimeError("DenseSearcher not properly initialized.")
+        if not texts:
+            return np.zeros((0,), dtype=np.float32)
+
+        # Documents/passages: no instruction prefix (Qwen3-Embedding encodes docs as raw text)
+        encoded = self.tokenizer(
+            texts,
+            padding=True,
+            truncation=True,
+            max_length=self.max_length,
+            return_tensors="pt",
+        )
+        model = random.choice(self.model_pool)
+        device = next(model.parameters()).device
+        encoded = {k: v.to(device) for k, v in encoded.items()}
+
+        with torch.autocast(
+            device_type="cuda",
+            dtype={"float16": torch.float16, "bfloat16": torch.bfloat16}[self.torch_dtype_str],
+        ):
+            with torch.no_grad():
+                if hasattr(model, "encode_passage"):
+                    reps = model.encode_passage(encoded).cpu().numpy()
+                else:
+                    reps = model.encode_query(encoded).cpu().numpy()
+        return reps
+
 def get_searcher(corpus: Corpus) -> BaseSearcher:
     """
     Reads environment variables to determine which searcher to instantiate

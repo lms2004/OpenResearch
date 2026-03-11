@@ -119,7 +119,17 @@ class FetchRequest(BaseModel):
 class FetchResponse(BaseModel):
     title: str
     content: str
-    
+
+
+class EncodeDocumentsRequest(BaseModel):
+    """Request to encode documents into vectors. Provide either texts or docids (from corpus)."""
+    texts: Optional[List[str]] = Field(default=None, description="Raw document texts to encode")
+    docids: Optional[List[str]] = Field(default=None, description="Document IDs from corpus; resolved to text via corpus")
+
+
+class EncodeDocumentsResponse(BaseModel):
+    embeddings: List[List[float]]
+
 
 _FM_PATTERN = re.compile(
     r"---\s*"
@@ -156,7 +166,7 @@ def root():
     return {
         "service": "Unified Search Service",
         "active_searcher": type(searcher).__name__,
-        "endpoints": ["/search", "/get_content"],
+        "endpoints": ["/search", "/get_content", "/encode_documents"],
     }
 
 @app.post("/search", response_model=Dict[str, List[SearchResponseItem]], tags=["search"])
@@ -206,3 +216,33 @@ def get_content(request: FetchRequest):
         title=parsed["title"],
         content=parsed["content"],
     )
+
+
+@app.post("/encode_documents", response_model=EncodeDocumentsResponse, tags=["search"])
+def encode_documents(request: EncodeDocumentsRequest):
+    """Encode given documents into vectors (dense searcher only). Provide either texts or docids."""
+    if not hasattr(searcher, "encode_documents"):
+        raise HTTPException(
+            status_code=501,
+            detail="encode_documents is only available when using dense searcher (SEARCHER_TYPE=dense)",
+        )
+    if request.texts is not None and request.docids is not None:
+        raise HTTPException(status_code=400, detail="Provide either texts or docids, not both.")
+    if request.texts is not None:
+        texts = [t or "" for t in request.texts]
+    elif request.docids is not None:
+        texts = []
+        for docid in request.docids:
+            t = corpus.get_text_from_id(str(docid))
+            if t is None:
+                raise HTTPException(status_code=404, detail=f"Document id not found in corpus: {docid}")
+            texts.append(t)
+    else:
+        raise HTTPException(status_code=400, detail="Provide either texts or docids.")
+
+    if not texts:
+        return EncodeDocumentsResponse(embeddings=[])
+
+    arr = searcher.encode_documents(texts)
+    embeddings = arr.tolist()
+    return EncodeDocumentsResponse(embeddings=embeddings)
