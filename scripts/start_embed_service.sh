@@ -37,6 +37,12 @@ source .venv/bin/activate
 # 与 start_search_service.sh dense 一致
 export DENSE_MODEL_NAME="${DENSE_MODEL_NAME:-Qwen/Qwen3-Embedding-8B}"
 
+# 可选：向 vLLM 透传 HuggingFace overrides（例如 matryoshka 维度）
+# 用法示例：
+#   HF_OVERRIDES='{"is_matryoshka": true, "matryoshka_dimensions": [32,64,128,256,512,1024,2048,4096]}' \
+#     bash scripts/start_embed_service.sh 8010 0
+HF_OVERRIDES="${HF_OVERRIDES:-}"
+
 echo -e "${GREEN}================================${NC}"
 echo -e "${GREEN}Starting vLLM Embedding Service${NC}"
 echo -e "${GREEN}================================${NC}"
@@ -45,6 +51,11 @@ echo "Port: ${PORT}"
 echo "CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}"
 echo "Tensor parallel size: ${TENSOR_PARALLEL_SIZE}"
 echo "GPU memory utilization: ${GPU_MEMORY_UTILIZATION}"
+if [ -n "${HF_OVERRIDES}" ]; then
+    echo "HF overrides: enabled"
+else
+    echo "HF overrides: disabled"
+fi
 echo ""
 echo "生成向量请另开终端运行: bash scripts/run_embed_bench.sh"
 echo -e "${GREEN}================================${NC}"
@@ -60,5 +71,8 @@ VLLM_CMD=(vllm serve "${DENSE_MODEL_NAME}"
 )
 if [ "$TENSOR_PARALLEL_SIZE" -gt 1 ]; then
     VLLM_CMD+=(--tensor-parallel-size "$TENSOR_PARALLEL_SIZE")
+fi
+if [ -n "${HF_OVERRIDES}" ]; then
+    VLLM_CMD+=(--hf-overrides "${HF_OVERRIDES}")
 fi
 exec "${VLLM_CMD[@]}"
