@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import glob
 import os
 import sys
 import time
@@ -62,6 +63,53 @@ def load_corpus_texts(parquet_path: str, max_docs: int | None) -> List[Tuple[str
     rows = con.execute(query).fetchall()
     con.close()
     return [(str(docid), (text or "").strip()) for docid, text in rows]
+
+
+def _parquet_id_column(con, path_escaped: str) -> str:
+    """检测 parquet 的 id 列名：FineWeb 用 id，Tevatron 等用 docid。"""
+    try:
+        names = [
+            row[0] for row in con.execute(
+                f"SELECT column_name FROM (DESCRIBE read_parquet('{path_escaped}'))"
+            ).fetchall()
+        ]
+        if "id" in names:
+            return "id"
+        if "docid" in names:
+            return "docid"
+    except Exception:
+        pass
+    return "docid"
+
+
+def load_corpus_texts_batched(
+    file_paths: List[str],
+    max_docs: int | None,
+    progress: bool = True,
+) -> List[Tuple[str, str]]:
+    """分批从多个 parquet 文件加载 (id, text)，带进度条。支持 FineWeb(id,text) 与 Tevatron(docid,text)。"""
+    if not file_paths:
+        return []
+    con = duckdb.connect(database=":memory:", read_only=False)
+    result: List[Tuple[str, str]] = []
+    iterator = file_paths
+    if progress and tqdm:
+        iterator = tqdm(file_paths, desc="加载语料", unit="file")
+    id_col = "docid"
+    for path in iterator:
+        path_escaped = path.replace("'", "''")
+        if not result:
+            id_col = _parquet_id_column(con, path_escaped)
+        rows = con.execute(
+            f"SELECT \"{id_col}\", text FROM read_parquet('{path_escaped}')"
+        ).fetchall()
+        for docid, text in rows:
+            result.append((str(docid), (text or "").strip()))
+        if max_docs is not None and len(result) >= max_docs:
+            result = result[: max_docs]
+            break
+    con.close()
+    return result
 
 
 def truncate_text(text: str, max_length: int) -> str:
@@ -183,12 +231,9 @@ def main():
         type=str,
         default=os.getenv(
             "CORPUS_PARQUET_PATH",
-            os.path.join(
-                os.path.dirname(_script_dir),
-                "Tevatron/browsecomp-plus-corpus/data/*.parquet",
-            ),
+            os.path.join(_project_root, "fineweb", "sample", "10BT", "*.parquet"),
         ),
-        help="Parquet 语料路径（支持 glob），与 start_search_service.sh dense 使用的 CORPUS_PARQUET_PATH 一致",
+        help="Parquet 语料路径（支持 glob）。默认 fineweb/sample/10BT（FineWeb id+text）",
     )
     parser.add_argument(
         "--embed_url",
@@ -205,8 +250,8 @@ def main():
     parser.add_argument(
         "--max_docs",
         type=int,
-        default=2000,
-        help="最多参与 benchmark 的文档数（默认 2000）；传 0 表示全量不限制",
+        default=0,
+        help="最多参与 benchmark 的文档数（默认 0=全量）；传正整数如 2000 可限制条数",
     )
     parser.add_argument(
         "--batch_size",
@@ -249,8 +294,22 @@ def main():
         corpus_path = os.path.join(_project_root, corpus_path)
 
     print("Loading corpus...")
+    # 展开 glob，打印实际加载的 parquet 文件
+    matched = sorted(glob.glob(corpus_path))
+    if not matched:
+        print(f"No parquet files matched: {corpus_path}")
+        sys.exit(1)
+    print("加载的语料文件:")
+    for f in matched:
+        print(f"  {f}")
+    print("")
+
     max_docs_arg = None if args.max_docs == 0 else args.max_docs
-    docid_texts = load_corpus_texts(corpus_path, max_docs_arg)
+    docid_texts = load_corpus_texts_batched(
+        matched,
+        max_docs_arg,
+        progress=not args.no_progress,
+    )
     if not docid_texts:
         print("No documents found. Check corpus path and max_docs.")
         sys.exit(1)

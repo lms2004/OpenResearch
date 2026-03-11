@@ -3,8 +3,8 @@
 # 前提：已在本机部署 embedding 服务，例如: bash scripts/start_embed_service.sh 8010
 #
 # 用法: bash scripts/run_embed_bench.sh [max_docs] [port] [--concurrency N] [--batch_size N] [--save_vectors PATH] ...
-# 示例: bash scripts/run_embed_bench.sh              # 默认 2000 条
-#       bash scripts/run_embed_bench.sh 0            # 全量
+# 示例: bash scripts/run_embed_bench.sh              # 默认全量
+#       bash scripts/run_embed_bench.sh 2000        # 仅 2000 条
 #       bash scripts/run_embed_bench.sh 0 8010 --concurrency 8 --batch_size 64
 #       bash scripts/run_embed_bench.sh 0 8010 --save_vectors results/embeddings.npy
 #
@@ -32,11 +32,11 @@ source .venv/bin/activate
 
 export EMBED_URL="http://localhost:${PORT}/v1"
 
-CORPUS_PATTERN="Tevatron/browsecomp-plus-corpus/data/*.parquet"
+CORPUS_PATTERN="fineweb/sample/10BT/*.parquet"
 CORPUS_ABS_GLOB="${PROJECT_ROOT}/${CORPUS_PATTERN}"
 if ! ls $CORPUS_ABS_GLOB 1>/dev/null 2>&1; then
     echo -e "${RED}Error: Corpus not found at ${CORPUS_PATTERN}${NC}"
-    echo "Run ./setup.sh to download the corpus."
+    echo "请将 fineweb/sample/10BT 下载到项目根目录下，或设置 CORPUS_PARQUET_PATH。"
     exit 1
 fi
 
